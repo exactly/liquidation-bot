@@ -1,0 +1,17 @@
+/artifacts/
+/coverage/
+/coverage.json
+/deployments/localhost/
+/deployments/*/solcInputs/
+/docs/
+/target/
+/types/
+
+.vscode/
+cache/
+node_modules/
+.DS_Store
+.env
+*.log
+*.code-workspace
+.*-version*
