@@ -1,5 +1,4 @@
 use std::fmt::{Display, Formatter};
-use std::error;
 
 struct NetError(String);
 
@@ -13,11 +12,9 @@ impl Display for LiquidationError {
         match self {
             LiquidationError::NetError(str) => {
                 write!(f, "{}", str)
-            }
-
-            _ => {
-                write!(f, "unknown error")
-            }
+            } // _ => {
+              //     write!(f, "unknown error")
+              // }
         }
     }
 }

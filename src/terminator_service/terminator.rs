@@ -1,10 +1,7 @@
-use std::process::exit;
 use crate::bindings::flash_loan_terminator::FlashLoanTerminator;
 use crate::bindings::iterminator::ITerminator;
 use crate::errors::LiquidationError;
 use crate::errors::LiquidationError::NetError;
-use crate::path_finder::service::TradePath;
-use ethers::abi::ethereum_types::H256;
 use ethers::abi::Address;
 use ethers::prelude::{Middleware, Signer, SignerMiddleware, TransactionReceipt, U256};
 
@@ -34,7 +31,7 @@ impl<M: Middleware, S: Signer> TerminatorService<M, S> {
         terminator_address: &Address,
         terminator_flash_address: &Address,
         client: std::sync::Arc<SignerMiddleware<M, S>>,
-        liquidator_enabled: bool,
+        _liquidator_enabled: bool,
     ) -> Self {
         let terminator = ITerminator::new(*terminator_address, client.clone());
         let terminator_flash = FlashLoanTerminator::new(*terminator_flash_address, client.clone());
@@ -54,7 +51,7 @@ impl<M: Middleware, S: Signer> TerminatorService<M, S> {
     pub async fn liquidate(
         &mut self,
         job: &TerminatorJob,
-        terminator_type: i32,
+        _terminator_type: i32,
     ) -> Result<TransactionReceipt, LiquidationError> {
         dbg!(&job);
         println!("Length: {}", &job.paths.len());
@@ -88,7 +85,6 @@ impl<M: Middleware, S: Signer> TerminatorService<M, S> {
                 dbg!(err);
                 dbg!(&job);
                 NetError(format!("Contract Error: Cant execute liquidation {:?}", &job).into())
-
             })?
             .await
             .map_err(|err| {

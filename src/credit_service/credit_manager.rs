@@ -1,27 +1,18 @@
 use crate::ampq_service::AmpqService;
 use async_recursion::async_recursion;
 use ethers::prelude::*;
-use futures::{stream, StreamExt};
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::fmt::format;
-use std::process::exit;
-use std::rc::Rc;
 use std::vec::Vec;
 
 use crate::bindings::credit_manager::CreditManager as CM;
 use crate::bindings::multicall_2::Multicall2;
-use crate::bindings::{
-    CloseCreditAccountFilter, CreditManagerEvents, DataCompressor, LiquidateCreditAccountFilter,
-    OpenCreditAccountFilter, RepayCreditAccountFilter,
-};
+use crate::bindings::{CreditManagerEvents, DataCompressor};
 use crate::config::config::str_to_address;
 use crate::credit_service::credit_account::CreditAccount;
 use crate::credit_service::credit_filter::CreditFilter;
 use crate::credit_service::pool::PoolService;
 use crate::errors::LiquidationError;
 use crate::errors::LiquidationError::NetError;
-use crate::path_finder::service::TradePath;
 use crate::path_finder::PathFinder;
 use crate::price_oracle::oracle::PriceOracle;
 use crate::terminator_service::terminator::TerminatorJob;
@@ -264,7 +255,7 @@ impl<M: Middleware, S: Signer> CreditManager<M, S> {
             .calc_repay_amount(*address, true)
             .call()
             .await
-            .map_err(|e| NetError("cant get repay amount".to_string()))?;
+            .map_err(|_| NetError("cant get repay amount".to_string()))?;
 
         Ok(TerminatorJob {
             credit_manager: self.address,
@@ -384,7 +375,7 @@ impl<M: Middleware, S: Signer> CreditManager<M, S> {
                     updated.remove(&data.old_owner);
                     updated.insert(data.new_owner);
                 }
-                CreditManagerEvents::NewParametersFilter(data) => {
+                CreditManagerEvents::NewParametersFilter(_) => {
                     println!("New params, {:?} ", &event.0)
                 }
                 CreditManagerEvents::ExecuteOrderFilter(data) => {

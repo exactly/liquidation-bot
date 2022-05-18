@@ -1,14 +1,13 @@
-use std::fmt::{Debug, Formatter};
-use std::ops::Deref;
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::fmt::{Debug, Formatter};
+use std::rc::Rc;
 pub struct Tst {
     n: u32,
 }
 
 impl Tst {
     pub fn new(num: u32) -> Self {
-        Tst {n: num}
+        Tst { n: num }
     }
 
     pub fn set(&mut self, n: u32) {
@@ -22,12 +21,11 @@ impl Debug for Tst {
     }
 }
 
-
 fn main() {
     let value = Rc::new(RefCell::new(Tst::new(5)));
 
     let b = Rc::clone(&value);
-    let c = Rc::clone(&value);
+    let _c = Rc::clone(&value);
 
     let mut t = value.borrow_mut();
     t.set(23);

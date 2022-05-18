@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ethers::abi::ethereum_types::{Address, U256};
-use ethers::prelude::{Middleware, StreamExt};
+use ethers::prelude::Middleware;
 
 use crate::bindings::path_finder::PathFinder as PathFinderContract;
 use crate::config::Config;
@@ -100,7 +100,7 @@ impl<M: Middleware> PathFinder<M> {
             )
             .call()
             .await
-            .map_err(|err| NetError("cant get best uni price".to_string()))?;
+            .map_err(|_err| NetError("cant get best uni price".to_string()))?;
 
         Ok(TradePath {
             path: result.0,

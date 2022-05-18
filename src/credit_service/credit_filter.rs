@@ -31,7 +31,7 @@ impl<M: Middleware> CreditFilter<M> {
             .unwrap();
 
         for event in events {
-            if (self.liquidation_thresholds.contains_key(&event.token)) {
+            if self.liquidation_thresholds.contains_key(&event.token) {
                 *self.liquidation_thresholds.get_mut(&event.token).unwrap() =
                     event.liquidity_threshold;
             } else {

@@ -72,6 +72,7 @@
     "@aave/protocol-v2": "^1.0.1",
     "@diesellabs/gearbox-leverage": "^0.0.95",
     "@diesellabs/gearbox-sdk": "^0.0.231",
+    "@exactly-finance/protocol": "exactly-finance/protocol#deploy",
     "deep-eql": "^4.0.0",
     "ethereumjs-util": "^7.1.0"
   }

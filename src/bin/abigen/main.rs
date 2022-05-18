@@ -1,6 +1,6 @@
-use ethers::{contract::Abigen, utils::Solc};
-use std::fs;
 use convert_case::{Case, Casing};
+use ethers::contract::Abigen;
+use std::fs;
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args();

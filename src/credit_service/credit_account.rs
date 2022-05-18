@@ -42,7 +42,7 @@ impl CreditAccount {
 
         let borrowed_amount_plus_interest =
             self.borrowed_amount * cumulative_index_now / self.cumulative_index_at_open;
-        self.health_factor = ((total / borrowed_amount_plus_interest).as_u64()) ;
+        self.health_factor = (total / borrowed_amount_plus_interest).as_u64();
 
         Ok(self.health_factor)
     }
