@@ -75,6 +75,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         &mut self,
         markets: Vec<H160>,
         auditor: Arc<AddressProvider<SignerMiddleware<M, S>>>,
+        block_number: U64,
     ) {
         // println!("dc {:?}", &self.dc);
         // let cm_list = self
@@ -130,6 +131,8 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         //     .send(String::from("Liquidation bot started!"))
         //     .await;
 
+        self.last_block_synced = block_number;
+
         self.update().await;
 
         let watcher = self.client.clone();
@@ -139,7 +142,6 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             .map_err(ContractError::MiddlewareError::<SignerMiddleware<M, S>>)
             .unwrap()
             .stream();
-
         while on_block.next().await.is_some() {
             match self.update().await {
                 Err(e) => {

@@ -100,8 +100,14 @@ async fn main() -> Result<()> {
     )
     .await;
 
+    let block_number = U64::from(address_provider.get_block_number());
+
     credit_service
-        .launch(data_compressor_addr, Arc::new(address_provider))
+        .launch(
+            data_compressor_addr,
+            Arc::new(address_provider),
+            block_number,
+        )
         .await;
 
     Ok(())

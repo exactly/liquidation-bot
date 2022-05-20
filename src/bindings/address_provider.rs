@@ -52,11 +52,14 @@ mod addressprovider_mod {
             auditor_abi
         });
     #[derive(Clone)]
-    pub struct AddressProvider<M>(ethers_contract::Contract<M>);
+    pub struct AddressProvider<M> {
+        contract: ethers_contract::Contract<M>,
+        block_number: u64,
+    }
     impl<M> std::ops::Deref for AddressProvider<M> {
         type Target = ethers_contract::Contract<M>;
         fn deref(&self) -> &Self::Target {
-            &self.0
+            &self.contract
         }
     }
     impl<M: ethers_providers::Middleware> std::fmt::Debug for AddressProvider<M> {
@@ -85,7 +88,20 @@ mod addressprovider_mod {
             let reader = BufReader::new(file);
             let auditor: Value = serde_json::from_reader(reader).unwrap();
 
-            println!("Auditor: {:?}", auditor["address"]);
+            let receipt: Value = if let Value::Object(receipt) = &auditor {
+                receipt["receipt"].clone()
+            } else {
+                panic!("Invalid ABI")
+            };
+            let block_number = if let Value::Object(receipt) = &receipt {
+                if let Value::Number(block_number) = &receipt["blockNumber"] {
+                    block_number.as_u64().unwrap()
+                } else {
+                    panic!("Invalid ABI")
+                }
+            } else {
+                panic!("Invalid ABI")
+            };
 
             let auditor_address = if let Value::String(s) = &auditor["address"] {
                 s
@@ -101,65 +117,71 @@ mod addressprovider_mod {
                 ADDRESSPROVIDER_ABI.clone(),
                 client,
             );
-            Self(contract)
+            Self {
+                contract: contract,
+                block_number: block_number,
+            }
+        }
+        pub fn get_block_number(&self) -> u64 {
+            self.block_number
         }
         #[doc = "Calls the contract's `ACCOUNT_FACTORY` (0x05197d10) function"]
         pub fn account_factory(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([5, 25, 125, 16], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `ACCOUNT_MINER` (0xc0e53d6e) function"]
         pub fn account_miner(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([192, 229, 61, 110], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `ACL` (0x7af53532) function"]
         pub fn acl(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([122, 245, 53, 50], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `CONTRACTS_REGISTER` (0xf9366f47) function"]
         pub fn contracts_register(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([249, 54, 111, 71], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `DATA_COMPRESSOR` (0x72788be7) function"]
         pub fn data_compressor(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([114, 120, 139, 231], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `GEAR_TOKEN` (0x124a6462) function"]
         pub fn gear_token(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([18, 74, 100, 98], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `PRICE_ORACLE` (0x0a19399a) function"]
         pub fn price_oracle(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([10, 25, 57, 154], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `TREASURY_CONTRACT` (0x9e9df2b9) function"]
         pub fn treasury_contract(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([158, 157, 242, 185], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `WETH_GATEWAY` (0xae5a98ba) function"]
         pub fn weth_gateway(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([174, 90, 152, 186], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `WETH_TOKEN` (0x37d277d4) function"]
         pub fn weth_token(&self) -> ethers_contract::builders::ContractCall<M, [u8; 32]> {
-            self.0
+            self.contract
                 .method_hash([55, 210, 119, 212], ())
                 .expect("method not found (this should never happen)")
         }
@@ -168,7 +190,7 @@ mod addressprovider_mod {
             &self,
             p0: [u8; 32],
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([105, 159, 32, 15], p0)
                 .expect("method not found (this should never happen)")
         }
@@ -176,7 +198,7 @@ mod addressprovider_mod {
         pub fn get_acl(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([8, 115, 118, 149], ())
                 .expect("method not found (this should never happen)")
         }
@@ -184,7 +206,7 @@ mod addressprovider_mod {
         pub fn get_account_factory(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([144, 104, 168, 104], ())
                 .expect("method not found (this should never happen)")
         }
@@ -192,7 +214,7 @@ mod addressprovider_mod {
         pub fn get_account_miner(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([11, 194, 133, 173], ())
                 .expect("method not found (this should never happen)")
         }
@@ -200,7 +222,7 @@ mod addressprovider_mod {
         pub fn get_contracts_register(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([197, 19, 201, 187], ())
                 .expect("method not found (this should never happen)")
         }
@@ -208,13 +230,13 @@ mod addressprovider_mod {
         pub fn get_data_compressor(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, Vec<ethers_core::types::Address>> {
-            println!("Contract address: {:?}", self.0.address());
+            println!("Contract address: {:?}", self.contract.address());
             //b0772d0b
-            self.0
+            self.contract
                 .method_hash([0xb0, 0x77, 0x2d, 0x0b], ())
                 .expect("method not found (this should never happen)")
 
-            // self.0
+            // self.contract
             //     .method("getAllMarkets", ())
             //     .expect("method not found (this should never happen)")
         }
@@ -222,7 +244,7 @@ mod addressprovider_mod {
         pub fn get_gear_token(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([175, 253, 146, 67], ())
                 .expect("method not found (this should never happen)")
         }
@@ -230,7 +252,7 @@ mod addressprovider_mod {
         pub fn get_price_oracle(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([252, 165, 19, 168], ())
                 .expect("method not found (this should never happen)")
         }
@@ -238,7 +260,7 @@ mod addressprovider_mod {
         pub fn get_treasury_contract(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([38, 199, 79, 195], ())
                 .expect("method not found (this should never happen)")
         }
@@ -246,7 +268,7 @@ mod addressprovider_mod {
         pub fn get_weth_gateway(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([119, 83, 46, 217], ())
                 .expect("method not found (this should never happen)")
         }
@@ -254,7 +276,7 @@ mod addressprovider_mod {
         pub fn get_weth_token(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([76, 37, 47, 145], ())
                 .expect("method not found (this should never happen)")
         }
@@ -262,13 +284,13 @@ mod addressprovider_mod {
         pub fn owner(
             &self,
         ) -> ethers_contract::builders::ContractCall<M, ethers_core::types::Address> {
-            self.0
+            self.contract
                 .method_hash([141, 165, 203, 91], ())
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Calls the contract's `renounceOwnership` (0x715018a6) function"]
         pub fn renounce_ownership(&self) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([113, 80, 24, 166], ())
                 .expect("method not found (this should never happen)")
         }
@@ -277,7 +299,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([118, 170, 214, 5], address)
                 .expect("method not found (this should never happen)")
         }
@@ -286,7 +308,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([173, 220, 26, 118], address)
                 .expect("method not found (this should never happen)")
         }
@@ -295,7 +317,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([137, 120, 212, 128], address)
                 .expect("method not found (this should never happen)")
         }
@@ -304,7 +326,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([206, 60, 74, 228], address)
                 .expect("method not found (this should never happen)")
         }
@@ -313,7 +335,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([197, 18, 11, 57], address)
                 .expect("method not found (this should never happen)")
         }
@@ -322,7 +344,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([188, 174, 173, 152], address)
                 .expect("method not found (this should never happen)")
         }
@@ -331,7 +353,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([83, 14, 120, 79], address)
                 .expect("method not found (this should never happen)")
         }
@@ -340,7 +362,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([30, 214, 81, 16], address)
                 .expect("method not found (this should never happen)")
         }
@@ -349,7 +371,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([33, 218, 88, 55], address)
                 .expect("method not found (this should never happen)")
         }
@@ -358,7 +380,7 @@ mod addressprovider_mod {
             &self,
             address: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([134, 224, 156, 8], address)
                 .expect("method not found (this should never happen)")
         }
@@ -367,23 +389,23 @@ mod addressprovider_mod {
             &self,
             new_owner: ethers_core::types::Address,
         ) -> ethers_contract::builders::ContractCall<M, ()> {
-            self.0
+            self.contract
                 .method_hash([242, 253, 227, 139], new_owner)
                 .expect("method not found (this should never happen)")
         }
         #[doc = "Gets the contract's `AddressSet` event"]
         pub fn address_set_filter(&self) -> ethers_contract::builders::Event<M, AddressSetFilter> {
-            self.0.event()
+            self.contract.event()
         }
         #[doc = "Gets the contract's `OwnershipTransferred` event"]
         pub fn ownership_transferred_filter(
             &self,
         ) -> ethers_contract::builders::Event<M, OwnershipTransferredFilter> {
-            self.0.event()
+            self.contract.event()
         }
         #[doc = r" Returns an [`Event`](ethers_contract::builders::Event) builder for all events of this contract"]
         pub fn events(&self) -> ethers_contract::builders::Event<M, AddressProviderEvents> {
-            self.0.event_with_filter(Default::default())
+            self.contract.event_with_filter(Default::default())
         }
     }
     #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]

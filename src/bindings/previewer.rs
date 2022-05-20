@@ -25,7 +25,6 @@ impl<M> std::ops::Deref for Previewer<M> {
 
 impl<M: Middleware> Previewer<M> {
     fn parse_abi(abi_path: &str) -> (Address, Abi) {
-        //"node_modules/@exactly-finance/protocol/deployments/kovan/FixedLenderDAI.json"
         let file = File::open(abi_path).unwrap();
         let reader = BufReader::new(file);
         let contract: Value = serde_json::from_reader(reader).unwrap();
@@ -62,8 +61,10 @@ impl<M: Middleware> Previewer<M> {
     pub fn new(abi_path: &str, address: Option<Address>, client: Arc<M>) -> Self {
         let (address_parsed, abi) = Self::parse_abi(abi_path);
         let address = if let Some(address) = address {
+            println!("Inputed address: {:?}", address);
             address
         } else {
+            println!("Parsed address: {:?}", address_parsed);
             address_parsed
         };
         let contract = Contract::new(address, abi, client);

@@ -84,6 +84,7 @@ impl<M: Middleware> FixedLender<M> {
         from_block: &U64,
         to_block: &U64,
     ) -> Vec<(FixedLenderEvents, LogMeta)> {
+        println!("Query events");
         let events = self
             .contract
             .event_with_filter(Default::default())
@@ -91,9 +92,16 @@ impl<M: Middleware> FixedLender<M> {
             .to_block(to_block)
             .query_with_meta()
             .await;
-
+        // 31585419
         match events {
-            Ok(result) => result,
+            Ok(result) => {
+                println!(
+                    "Events loaded: {} for contract {:?}",
+                    result.len(),
+                    self.contract.address()
+                );
+                result
+            }
             Err(err) => {
                 println!("Query err: {:?}", err);
 
@@ -123,16 +131,45 @@ impl<M: Middleware> FixedLender<M> {
         for event in events {
             println!("event: {:?}", event);
             match &event.0 {
-                FixedLenderEvents::DepositAtMaturityFilter(_data) => {}
-                FixedLenderEvents::WithdrawAtMaturityFilter(_data) => {}
+                FixedLenderEvents::RoleGrantedFilter(_data) => {}
+                FixedLenderEvents::RoleAdminChangedFilter(_data) => {}
+                FixedLenderEvents::RoleRevokedFilter(_data) => {}
+                FixedLenderEvents::TransferFilter(data) => {
+                    if data.from != Address::zero {
+                        updated.insert(data.from);
+                    }
+                    if data.to != Address::zero {
+                        updated.insert(data.to);
+                    }
+                }
+                FixedLenderEvents::DepositFilter(data) => {
+                    updated.insert(data.owner);
+                }
+                FixedLenderEvents::WithdrawFilter(data) => {
+                    updated.insert(data.owner);
+                }
+                FixedLenderEvents::ApprovalFilter(_data) => {}
+                FixedLenderEvents::DepositAtMaturityFilter(data) => {
+                    updated.insert(data.owner);
+                }
+                FixedLenderEvents::WithdrawAtMaturityFilter(data) => {
+                    updated.insert(data.owner);
+                }
                 FixedLenderEvents::BorrowAtMaturityFilter(data) => {
                     updated.insert(data.borrower);
                 }
-                FixedLenderEvents::RepayAtMaturityFilter(_data) => {}
-                FixedLenderEvents::LiquidateBorrowFilter(_data) => {}
-                FixedLenderEvents::AssetSeizedFilter(_data) => {}
+                FixedLenderEvents::RepayAtMaturityFilter(data) => {
+                    updated.insert(data.borrower);
+                }
+                FixedLenderEvents::LiquidateBorrowFilter(data) => {
+                    updated.insert(data.borrower);
+                }
+                FixedLenderEvents::AssetSeizedFilter(data) => {
+                    updated.insert(data.borrower);
+                }
                 FixedLenderEvents::AccumulatedEarningsSmoothFactorUpdatedFilter(_data) => {}
                 FixedLenderEvents::MaxFuturePoolsUpdatedFilter(_data) => {}
+                FixedLenderEvents::SmartPoolEarningsAccruedFilter(_data) => {}
             }
         }
         // println!("Got operations: {}", &counter);
@@ -145,7 +182,7 @@ impl<M: Middleware> FixedLender<M> {
             .previewer
             .abi()
             .functions
-            .get("accountLiquidity")
+            .get("extendedAccountData")
             .unwrap()[0];
 
         dbg!(&updated);
@@ -154,37 +191,51 @@ impl<M: Middleware> FixedLender<M> {
         let batch = 1000;
 
         while skip < updated.len() {
-            let mut calls: Vec<(ethers_core::types::Address, Vec<u8>)> = Vec::new();
+            let mut calls: Vec<(Address, Vec<u8>)> = Vec::new();
 
             for borrower in updated.clone().iter().skip(skip).take(batch) {
-                let tokens = vec![
-                    Token::Address(self.auditor.address()),
-                    Token::Address(*borrower),
-                ];
+                let tokens = vec![Token::Address(*borrower)];
                 let brw: Vec<u8> = (*function.encode_input(&tokens).unwrap()).to_owned();
-                calls.push((self.auditor.address(), brw));
+                calls.push((self.previewer.address(), brw));
             }
 
+            println!("multicall");
+
             let response = self.multicall.aggregate(calls).call().await.unwrap();
+
+            println!("Response: {:?}", response);
 
             let responses = response.1;
 
             for r in responses.iter() {
-                let payload: (ethers_core::types::U256, ethers_core::types::U256) =
-                    decode_function_data(function, r, false).unwrap();
+                let payload: Vec<(
+                    Address,
+                    String,
+                    Vec<(U256, (U256, U256))>,
+                    Vec<(U256, (U256, U256))>,
+                    U256,
+                    U256,
+                    U256,
+                    U128,
+                    U128,
+                    u8,
+                    bool,
+                )> = decode_function_data(function, r, false).unwrap();
 
-                let _health_factor = 0; // payload.7.as_u64();
+                println!("payload: {:?}", payload);
+
+                // let _health_factor = 0; // payload.7.as_u64();
 
                 let borrower = Address::default();
 
-                let borrower_account = Borrower::new(borrower, payload.0, payload.1);
+                // let borrower_account = Borrower::new(borrower, payload.0, payload.1);
 
-                if self.borrower_accounts.contains_key(&borrower) {
-                    // dbg!(data.unwrap().0);
-                    *self.borrower_accounts.get_mut(&borrower).unwrap() = borrower_account;
-                } else {
-                    self.borrower_accounts.insert(borrower, borrower_account);
-                }
+                // if self.borrower_accounts.contains_key(&borrower) {
+                //     // dbg!(data.unwrap().0);
+                //     *self.borrower_accounts.get_mut(&borrower).unwrap() = borrower_account;
+                // } else {
+                //     self.borrower_accounts.insert(borrower, borrower_account);
+                // }
             }
 
             skip += batch;
@@ -234,8 +285,8 @@ impl<M: Middleware> FixedLender<M> {
 
     pub async fn update<S, N>(
         &mut self,
-        _from_block: &U64,
-        _to_block: &U64,
+        from_block: &U64,
+        to_block: &U64,
         price_oracle: &PriceOracle<N, S>,
         _path_finder: &PathFinder<M>,
         _jobs: &mut Vec<TerminatorJob>,
@@ -246,9 +297,9 @@ impl<M: Middleware> FixedLender<M> {
     {
         // self.credit_filter.update(from_block, to_block).await;
 
-        let from = ethers::prelude::U64::from(0u64);
-        let to = ethers::prelude::U64::from(0u64);
-        self.update_accounts(&from, &to).await;
+        // let from = ethers::prelude::U64::from(0u64);
+        // let to = ethers::prelude::U64::from(0u64);
+        self.update_accounts(from_block, to_block).await;
 
         let new_ci = U256::from(0u64); // self.pool_service.get_new_ci().await;
 
