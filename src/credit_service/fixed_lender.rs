@@ -135,10 +135,10 @@ impl<M: Middleware> FixedLender<M> {
                 FixedLenderEvents::RoleAdminChangedFilter(_data) => {}
                 FixedLenderEvents::RoleRevokedFilter(_data) => {}
                 FixedLenderEvents::TransferFilter(data) => {
-                    if data.from != Address::zero {
+                    if data.from != Address::zero() {
                         updated.insert(data.from);
                     }
-                    if data.to != Address::zero {
+                    if data.to != Address::zero() {
                         updated.insert(data.to);
                     }
                 }
@@ -193,7 +193,9 @@ impl<M: Middleware> FixedLender<M> {
         while skip < updated.len() {
             let mut calls: Vec<(Address, Vec<u8>)> = Vec::new();
 
+            let mut updated_waiting_data: Vec<Address> = Vec::new();
             for borrower in updated.clone().iter().skip(skip).take(batch) {
+                updated_waiting_data.push(borrower.clone());
                 let tokens = vec![Token::Address(*borrower)];
                 let brw: Vec<u8> = (*function.encode_input(&tokens).unwrap()).to_owned();
                 calls.push((self.previewer.address(), brw));
@@ -208,6 +210,9 @@ impl<M: Middleware> FixedLender<M> {
             let responses = response.1;
 
             for r in responses.iter() {
+                let mut updateds = updated_waiting_data.iter();
+
+                println!("Iterates over responses");
                 let payload: Vec<(
                     Address,
                     String,
@@ -222,20 +227,22 @@ impl<M: Middleware> FixedLender<M> {
                     bool,
                 )> = decode_function_data(function, r, false).unwrap();
 
-                println!("payload: {:?}", payload);
+                println!("payload[{}]: {:?}", payload.len(), &payload);
 
                 // let _health_factor = 0; // payload.7.as_u64();
+                let borrower = updateds
+                    .next()
+                    .expect("Number of borrowers and responses doesn't match");
 
-                let borrower = Address::default();
+                let borrower_account = Borrower::new(borrower.clone(), payload);
 
-                // let borrower_account = Borrower::new(borrower, payload.0, payload.1);
-
-                // if self.borrower_accounts.contains_key(&borrower) {
-                //     // dbg!(data.unwrap().0);
-                //     *self.borrower_accounts.get_mut(&borrower).unwrap() = borrower_account;
-                // } else {
-                //     self.borrower_accounts.insert(borrower, borrower_account);
-                // }
+                if self.borrower_accounts.contains_key(&borrower) {
+                    // dbg!(data.unwrap().0);
+                    *self.borrower_accounts.get_mut(borrower).unwrap() = borrower_account;
+                } else {
+                    self.borrower_accounts
+                        .insert(borrower.clone(), borrower_account);
+                }
             }
 
             skip += batch;
@@ -283,13 +290,33 @@ impl<M: Middleware> FixedLender<M> {
             .expect("Method not found")
     }
 
+    pub fn liquidate(
+        &self,
+        borrower: &Borrower,
+        position_assets: U256,
+        collateral_fixed_lender: Address,
+    ) -> ContractCall<M, ()> {
+        let max_assets_allowed: U256 = U256::zero();
+        self.contract
+            .method(
+                "liquidate",
+                (
+                    borrower.borrower().clone(),
+                    position_assets,
+                    max_assets_allowed,
+                    collateral_fixed_lender,
+                ),
+            )
+            .expect("Method not found")
+    }
+
     pub async fn update<S, N>(
         &mut self,
         from_block: &U64,
         to_block: &U64,
         price_oracle: &PriceOracle<N, S>,
-        _path_finder: &PathFinder<M>,
-        _jobs: &mut Vec<TerminatorJob>,
+        path_finder: &PathFinder<M>,
+        jobs: &mut Vec<TerminatorJob>,
     ) -> Result<(), LiquidationError>
     where
         S: Signer,
@@ -297,25 +324,18 @@ impl<M: Middleware> FixedLender<M> {
     {
         // self.credit_filter.update(from_block, to_block).await;
 
-        // let from = ethers::prelude::U64::from(0u64);
-        // let to = ethers::prelude::U64::from(0u64);
         self.update_accounts(from_block, to_block).await;
 
         let new_ci = U256::from(0u64); // self.pool_service.get_new_ci().await;
 
         println!("Credit manager: {:?}", &self.address());
 
-        let accs_to_liquidate: HashSet<Address> = HashSet::new();
+        let mut accs_to_liquidate: HashSet<Borrower> = HashSet::new();
         for borrower in self.borrower_accounts.iter_mut() {
-            let hf = borrower.1.compute_hf(
-                self.underlying_token,
-                &new_ci,
-                price_oracle,
-                // &self.contract,
-            )?;
+            let hf: U256 = borrower.1.compute_hf()?;
 
-            if hf < 10000 {
-                // if self.added_to_job.contains_key(&ca.1.borrower) {
+            if hf <= U256::exp10(18) {
+                // if self.added_to_job.contains_key(&borrower.1.borrower()) {
                 //     let bad_debt_blocks = self.added_to_job[&ca.1.borrower] + 1;
                 //     *self.added_to_job.get_mut(&ca.1.borrower).unwrap() = bad_debt_blocks;
 
@@ -338,19 +358,24 @@ impl<M: Middleware> FixedLender<M> {
                 //     }
                 // } else {
                 //     self.added_to_job.insert(*&ca.1.borrower, 0u32);
-                //     accs_to_liquidate.insert(ca.1.borrower);
+                // accs_to_liquidate.insert(borrower.1.borrower());
+                accs_to_liquidate.insert(borrower.1.clone());
                 // }
             } else {
                 // self.added_to_job.remove(&ca.1.borrower);
             }
         }
 
-        dbg!(&accs_to_liquidate);
+        // dbg!(&accs_to_liquidate);
 
         println!("Starting liquidation process:");
 
-        for _acc in accs_to_liquidate {
-            //jobs.push(self.liquidate(&acc, path_finder).await?);
+        for acc in accs_to_liquidate {
+            // jobs.push(self.liquidate(acc)).await?;
+            self.liquidate(&acc, U256::from(0u64), Address::zero())
+                .call()
+                .await
+                .unwrap();
         }
         Ok(())
     }

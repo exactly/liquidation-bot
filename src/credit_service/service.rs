@@ -193,15 +193,16 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         let mut terminator_jobs: Vec<TerminatorJob> = Vec::new();
 
         // Updates info
-        for cm in self.credit_managers.iter_mut() {
-            cm.update(
-                &self.last_block_synced,
-                &to,
-                &self.price_oracle,
-                &self.path_finder,
-                &mut terminator_jobs,
-            )
-            .await?
+        for fixed_lender in self.credit_managers.iter_mut() {
+            fixed_lender
+                .update(
+                    &self.last_block_synced,
+                    &to,
+                    &self.price_oracle,
+                    &self.path_finder,
+                    &mut terminator_jobs,
+                )
+                .await?
         }
 
         println!("Terminator jobs : {}", &terminator_jobs.len());

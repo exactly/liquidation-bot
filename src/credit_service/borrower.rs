@@ -1,41 +1,155 @@
 use ethers::prelude::*;
 
-use crate::{errors::LiquidationError, price_oracle::oracle::PriceOracle};
+use crate::errors::LiquidationError;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Hash, Eq, Clone)]
+struct BorrowerData {
+    fixed_lender: Address,
+    asset_symbol: String,
+    maturity_supply_positions: Vec<(U256, (U256, U256))>,
+    maturity_borrow_positions: Vec<(U256, (U256, U256))>,
+    smart_pool_assets: U256,
+    smart_pool_shares: U256,
+    oracle_price: U256,
+    penalty_rate: U128,
+    collateral_factor: U128,
+    decimals: u8,
+    is_collateral: bool,
+}
+
+impl PartialEq for BorrowerData {
+    fn eq(&self, other: &Self) -> bool {
+        self.fixed_lender == other.fixed_lender
+    }
+}
+
+impl BorrowerData {
+    fn new(
+        (
+            fixed_lender,
+            asset_symbol,
+            maturity_supply_positions,
+            maturity_borrow_positions,
+            smart_pool_assets,
+            smart_pool_shares,
+            oracle_price,
+            penalty_rate,
+            collateral_factor,
+            decimals,
+            is_collateral,
+        ): (
+            Address,
+            String,
+            Vec<(U256, (U256, U256))>,
+            Vec<(U256, (U256, U256))>,
+            U256,
+            U256,
+            U256,
+            U128,
+            U128,
+            u8,
+            bool,
+        ),
+    ) -> Self {
+        BorrowerData {
+            fixed_lender,
+            asset_symbol,
+            maturity_supply_positions,
+            maturity_borrow_positions,
+            smart_pool_assets,
+            smart_pool_shares,
+            oracle_price,
+            penalty_rate,
+            collateral_factor,
+            decimals,
+            is_collateral,
+        }
+    }
+}
+
+#[derive(Hash, Eq, Clone)]
 pub struct Borrower {
     borrower: Address,
-    sum_collateral: U256,
-    sum_debts: U256,
-    health_factor: u64,
+    data: Vec<BorrowerData>,
+    debt: Option<U256>,
+}
+
+impl PartialEq for Borrower {
+    fn eq(&self, other: &Self) -> bool {
+        self.borrower == other.borrower
+    }
 }
 
 impl Borrower {
-    pub fn new(borrower: Address, sum_collateral: U256, sum_debts: U256) -> Self {
+    pub fn new(
+        borrower: Address,
+        account_data: Vec<(
+            Address,
+            String,
+            Vec<(U256, (U256, U256))>,
+            Vec<(U256, (U256, U256))>,
+            U256,
+            U256,
+            U256,
+            U128,
+            U128,
+            u8,
+            bool,
+        )>,
+    ) -> Self {
+        let mut data = Vec::<BorrowerData>::new();
+        for d in account_data {
+            data.push(BorrowerData::new(d));
+        }
         Borrower {
             borrower,
-            sum_collateral,
-            sum_debts,
-            health_factor: 0,
+            data,
+            debt: None,
         }
     }
 
-    pub fn compute_hf<M: Middleware, S: Signer>(
-        &mut self,
-        _underlying_token: Address,
-        _cumulative_index_now: &U256,
-        _price_oracle: &PriceOracle<M, S>,
-        // credit_filter: &CreditFilter<SignerMiddleware<M, S>>,
-    ) -> Result<u64, LiquidationError> {
-        // let mut total: U256 = 0.into();
-        // for asset in self.balances.clone() {
-        //     total += price_oracle.convert(asset.1, asset.0, underlying_token)?
-        //         * credit_filter.liquidation_thresholds.get(&asset.0).unwrap();
-        // }
+    pub fn compute_hf(&mut self) -> Result<U256, LiquidationError> {
+        let mut collateral: U256 = 0i32.into();
+        let mut debt: U256 = 0i32.into();
+        for data in self.data.iter() {
+            if data.is_collateral {
+                collateral += (data.smart_pool_assets * data.oracle_price
+                    / U256::exp10(usize::from(data.decimals)))
+                    * U256::from(data.collateral_factor)
+                    / U256::exp10(18);
+            }
 
-        // let borrowed_amount_plus_interest =
-        //     self.borrowed_amount * cumulative_index_now / self.cumulative_index_at_open;
-        // self.health_factor = ((total / borrowed_amount_plus_interest).as_u64());
+            for (maturity, (principal, fee)) in data.maturity_borrow_positions.iter() {
+                let current_timestamp = Self::get_timestamp_seconds();
+                debt += principal + fee;
+                if *maturity < current_timestamp {
+                    debt += (current_timestamp - maturity) * U256::from(data.penalty_rate)
+                }
+            }
+        }
+        self.debt = Some(debt);
+        let hf = collateral / debt;
+        Ok(hf)
+    }
 
-        Ok(self.health_factor)
+    /// Get the borrower's address.
+    pub fn borrower(&self) -> H160 {
+        self.borrower
+    }
+
+    fn get_timestamp_seconds() -> U256 {
+        U256::from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+    }
+
+    /// Get the borrower's debt.
+    #[must_use]
+    pub fn debt(&self) -> Option<U256> {
+        self.debt
     }
 }

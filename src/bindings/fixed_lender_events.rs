@@ -134,21 +134,21 @@ pub struct MaxFuturePoolsUpdatedFilter {
 #[ethevent(name = "Transfer", abi = "Transfer(address,address,uint256)")]
 pub struct TransferFilter {
     #[ethevent(indexed)]
-    from: Address,
+    pub from: Address,
     #[ethevent(indexed)]
-    to: Address,
-    amount: U256,
+    pub to: Address,
+    pub amount: U256,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "Deposit", abi = "Deposit(address,address,uint256,uint256)")]
 pub struct DepositFilter {
     #[ethevent(indexed)]
-    caller: Address,
+    pub caller: Address,
     #[ethevent(indexed)]
-    owner: Address,
-    assets: U256,
-    shares: U256,
+    pub owner: Address,
+    pub assets: U256,
+    pub shares: U256,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
@@ -158,23 +158,23 @@ pub struct DepositFilter {
 )]
 pub struct WithdrawFilter {
     #[ethevent(indexed)]
-    caller: Address,
+    pub caller: Address,
     #[ethevent(indexed)]
-    receiver: Address,
+    pub receiver: Address,
     #[ethevent(indexed)]
-    owner: Address,
-    assets: U256,
-    shares: U256,
+    pub owner: Address,
+    pub assets: U256,
+    pub shares: U256,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "Approval", abi = "Approval(address,address,uint256)")]
 pub struct ApprovalFilter {
     #[ethevent(indexed)]
-    owner: Address,
+    pub owner: Address,
     #[ethevent(indexed)]
-    spender: Address,
-    amount: U256,
+    pub spender: Address,
+    pub amount: U256,
 }
 
 #[allow(non_snake_case)]
@@ -335,7 +335,6 @@ impl EthLogDecode for FixedLenderEvents {
         if let Ok(decoded) = RoleRevokedFilter::decode_log(log) {
             return Ok(FixedLenderEvents::RoleRevokedFilter(decoded));
         }
-
         if let Ok(decoded) = TransferFilter::decode_log(log) {
             return Ok(FixedLenderEvents::TransferFilter(decoded));
         }
