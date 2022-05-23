@@ -8,5 +8,6 @@ cache/
 build/
 typechain/
 artifacts/
+.vscode/
 coverage*
 .DS_Store
