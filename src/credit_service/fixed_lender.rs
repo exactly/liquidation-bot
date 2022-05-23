@@ -290,12 +290,7 @@ impl<M: Middleware> FixedLender<M> {
             .expect("Method not found")
     }
 
-    pub fn liquidate(
-        &self,
-        borrower: &Borrower,
-        position_assets: U256,
-        collateral_fixed_lender: Address,
-    ) -> ContractCall<M, ()> {
+    pub fn liquidate(&self, borrower: &Borrower, position_assets: U256) -> ContractCall<M, ()> {
         let max_assets_allowed: U256 = U256::zero();
         self.contract
             .method(
@@ -304,7 +299,7 @@ impl<M: Middleware> FixedLender<M> {
                     borrower.borrower().clone(),
                     position_assets,
                     max_assets_allowed,
-                    collateral_fixed_lender,
+                    borrower.seizable_collateral().unwrap(),
                 ),
             )
             .expect("Method not found")
@@ -372,10 +367,7 @@ impl<M: Middleware> FixedLender<M> {
 
         for acc in accs_to_liquidate {
             // jobs.push(self.liquidate(acc)).await?;
-            self.liquidate(&acc, U256::from(0u64), Address::zero())
-                .call()
-                .await
-                .unwrap();
+            self.liquidate(&acc, U256::from(0u64)).call().await.unwrap();
         }
         Ok(())
     }

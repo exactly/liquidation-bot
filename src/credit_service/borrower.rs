@@ -73,6 +73,7 @@ pub struct Borrower {
     borrower: Address,
     data: Vec<BorrowerData>,
     debt: Option<U256>,
+    seizable_collateral: Option<Address>,
 }
 
 impl PartialEq for Borrower {
@@ -106,18 +107,24 @@ impl Borrower {
             borrower,
             data,
             debt: None,
+            seizable_collateral: None,
         }
     }
 
     pub fn compute_hf(&mut self) -> Result<U256, LiquidationError> {
         let mut collateral: U256 = 0i32.into();
         let mut debt: U256 = 0i32.into();
+        let mut seizable_collateral: (U256, Option<Address>) = (U256::zero(), None);
         for data in self.data.iter() {
             if data.is_collateral {
-                collateral += (data.smart_pool_assets * data.oracle_price
+                let current_collateral = (data.smart_pool_assets * data.oracle_price
                     / U256::exp10(usize::from(data.decimals)))
                     * U256::from(data.collateral_factor)
                     / U256::exp10(18);
+                if current_collateral > seizable_collateral.0 {
+                    seizable_collateral = (current_collateral, Some(data.fixed_lender));
+                }
+                collateral += current_collateral;
             }
 
             for (maturity, (principal, fee)) in data.maturity_borrow_positions.iter() {
@@ -128,6 +135,7 @@ impl Borrower {
                 }
             }
         }
+        self.seizable_collateral = seizable_collateral.1;
         self.debt = Some(debt);
         let hf = collateral / debt;
         Ok(hf)
@@ -151,5 +159,11 @@ impl Borrower {
     #[must_use]
     pub fn debt(&self) -> Option<U256> {
         self.debt
+    }
+
+    /// Get the borrower's seizable collateral.
+    #[must_use]
+    pub fn seizable_collateral(&self) -> Option<Address> {
+        self.seizable_collateral
     }
 }
