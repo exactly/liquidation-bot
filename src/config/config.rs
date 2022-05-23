@@ -24,9 +24,9 @@ impl Default for Config {
     fn default() -> Self {
         dotenv::from_filename(".env").ok();
         dotenv::from_filename(".env.local").ok();
-        let chain_id = get_env_or_throw("REACT_APP_CHAIN_ID")
+        let chain_id = get_env_or_throw("CHAIN_ID")
             .parse::<u64>()
-            .expect("REACT_APP_CHAIN_ID is not number");
+            .expect("CHAIN_ID is not number");
         let address_provider =
             str_to_address(get_env_or_throw("REACT_APP_ADDRESS_PROVIDER").as_str());
 
@@ -44,6 +44,12 @@ impl Default for Config {
                 get_env_or_throw("ETH_MAINNET_PROVIDER"),
                 "https://etherscan.io",
                 "https://charts.gearbox.fi",
+            ),
+            4 => (
+                "RINKEBY",
+                get_env_or_throw("ETH_RINKEBY_PROVIDER"),
+                "https://rinkeby.etherscan.io",
+                "https://charts.rinkeby.gearbox.fi",
             ),
             42 => (
                 "KOVAN",
