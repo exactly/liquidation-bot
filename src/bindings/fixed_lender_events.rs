@@ -216,6 +216,20 @@ pub struct RoleRevokedFilter {
     pub sender: Address,
 }
 
+#[allow(non_snake_case)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
+#[ethevent(name = "Paused", abi = "Paused(address)")]
+pub struct PausedFilter {
+    pub account: Address,
+}
+
+#[allow(non_snake_case)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
+#[ethevent(name = "Unpaused", abi = "Unpaused(address)")]
+pub struct UnpausedFilter {
+    pub account: Address,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FixedLenderEvents {
     TransferFilter(TransferFilter),
@@ -234,6 +248,8 @@ pub enum FixedLenderEvents {
     RoleGrantedFilter(RoleGrantedFilter),
     RoleAdminChangedFilter(RoleAdminChangedFilter),
     RoleRevokedFilter(RoleRevokedFilter),
+    PausedFilter(PausedFilter),
+    UnpausedFilter(UnpausedFilter),
 }
 
 impl ethers_core::abi::Tokenizable for FixedLenderEvents {
@@ -290,6 +306,12 @@ impl ethers_core::abi::Tokenizable for FixedLenderEvents {
         if let Ok(decoded) = SmartPoolEarningsAccruedFilter::from_token(token.clone()) {
             return Ok(FixedLenderEvents::SmartPoolEarningsAccruedFilter(decoded));
         }
+        if let Ok(decoded) = PausedFilter::from_token(token.clone()) {
+            return Ok(FixedLenderEvents::PausedFilter(decoded));
+        }
+        if let Ok(decoded) = UnpausedFilter::from_token(token.clone()) {
+            return Ok(FixedLenderEvents::UnpausedFilter(decoded));
+        }
         Err(ethers::abi::InvalidOutputType(String::from(
             "Event Unknown",
         )))
@@ -315,6 +337,8 @@ impl ethers_core::abi::Tokenizable for FixedLenderEvents {
             }
             FixedLenderEvents::MaxFuturePoolsUpdatedFilter(element) => element.into_token(),
             FixedLenderEvents::SmartPoolEarningsAccruedFilter(element) => element.into_token(),
+            FixedLenderEvents::PausedFilter(element) => element.into_token(),
+            FixedLenderEvents::UnpausedFilter(element) => element.into_token(),
         }
     }
 }
@@ -373,6 +397,12 @@ impl EthLogDecode for FixedLenderEvents {
         }
         if let Ok(decoded) = SmartPoolEarningsAccruedFilter::decode_log(log) {
             return Ok(FixedLenderEvents::SmartPoolEarningsAccruedFilter(decoded));
+        }
+        if let Ok(decoded) = PausedFilter::decode_log(log) {
+            return Ok(FixedLenderEvents::PausedFilter(decoded));
+        }
+        if let Ok(decoded) = UnpausedFilter::decode_log(log) {
+            return Ok(FixedLenderEvents::UnpausedFilter(decoded));
         }
         println!("Missing event: {:?}", log);
         Err(ethers::abi::Error::InvalidData)

@@ -170,6 +170,8 @@ impl<M: Middleware> FixedLender<M> {
                 FixedLenderEvents::AccumulatedEarningsSmoothFactorUpdatedFilter(_data) => {}
                 FixedLenderEvents::MaxFuturePoolsUpdatedFilter(_data) => {}
                 FixedLenderEvents::SmartPoolEarningsAccruedFilter(_data) => {}
+                FixedLenderEvents::PausedFilter(_data) => {}
+                FixedLenderEvents::UnpausedFilter(_data) => {}
             }
         }
         // println!("Got operations: {}", &counter);
