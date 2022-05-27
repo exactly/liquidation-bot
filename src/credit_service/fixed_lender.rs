@@ -118,8 +118,13 @@ impl<M: Middleware> FixedLender<M> {
         }
     }
 
-    async fn update_accounts(&mut self, from_block: &U64, to_block: &U64) {
-        let mut updated: HashSet<Address> = HashSet::new();
+    async fn update_accounts(
+        &mut self,
+        from_block: &U64,
+        to_block: &U64,
+        liquidation_candidates: &mut HashSet<Address>,
+    ) {
+        // let mut updated: HashSet<Address> = HashSet::new();
 
         let events = self.load_events(from_block, to_block).await;
 
@@ -136,36 +141,36 @@ impl<M: Middleware> FixedLender<M> {
                 FixedLenderEvents::RoleRevokedFilter(_data) => {}
                 FixedLenderEvents::TransferFilter(data) => {
                     if data.from != Address::zero() {
-                        updated.insert(data.from);
+                        liquidation_candidates.insert(data.from);
                     }
                     if data.to != Address::zero() {
-                        updated.insert(data.to);
+                        liquidation_candidates.insert(data.to);
                     }
                 }
                 FixedLenderEvents::DepositFilter(data) => {
-                    updated.insert(data.owner);
+                    liquidation_candidates.insert(data.owner);
                 }
                 FixedLenderEvents::WithdrawFilter(data) => {
-                    updated.insert(data.owner);
+                    liquidation_candidates.insert(data.owner);
                 }
                 FixedLenderEvents::ApprovalFilter(_data) => {}
                 FixedLenderEvents::DepositAtMaturityFilter(data) => {
-                    updated.insert(data.owner);
+                    liquidation_candidates.insert(data.owner);
                 }
                 FixedLenderEvents::WithdrawAtMaturityFilter(data) => {
-                    updated.insert(data.owner);
+                    liquidation_candidates.insert(data.owner);
                 }
                 FixedLenderEvents::BorrowAtMaturityFilter(data) => {
-                    updated.insert(data.borrower);
+                    liquidation_candidates.insert(data.borrower);
                 }
                 FixedLenderEvents::RepayAtMaturityFilter(data) => {
-                    updated.insert(data.borrower);
+                    liquidation_candidates.insert(data.borrower);
                 }
                 FixedLenderEvents::LiquidateBorrowFilter(data) => {
-                    updated.insert(data.borrower);
+                    liquidation_candidates.insert(data.borrower);
                 }
                 FixedLenderEvents::AssetSeizedFilter(data) => {
-                    updated.insert(data.borrower);
+                    liquidation_candidates.insert(data.borrower);
                 }
                 FixedLenderEvents::AccumulatedEarningsSmoothFactorUpdatedFilter(_data) => {}
                 FixedLenderEvents::MaxFuturePoolsUpdatedFilter(_data) => {}
@@ -176,80 +181,72 @@ impl<M: Middleware> FixedLender<M> {
         }
         // println!("Got operations: {}", &counter);
         // println!("Got operations: {:?}", &oper_by_user.keys().len());
-        println!("\n\nUnderlying token: {:?}", &self.underlying_token);
-        println!("\n\nCredit manager: {:?}", &self.address());
-        println!("Update needed for accounts: {}", &updated.len());
+        println!("Fixed Lender: {:?}", &self.address());
 
-        let function = &self
-            .previewer
-            .abi()
-            .functions
-            .get("extendedAccountData")
-            .unwrap()[0];
+        // let function = &self.previewer.abi().functions.get("accounts").unwrap()[0];
 
-        dbg!(&updated);
+        dbg!(&liquidation_candidates);
 
-        let mut skip: usize = 0;
-        let batch = 1000;
+        // let mut skip: usize = 0;
+        // let batch = 1000;
 
-        while skip < updated.len() {
-            let mut calls: Vec<(Address, Vec<u8>)> = Vec::new();
+        // while skip < updated.len() {
+        //     let mut calls: Vec<(Address, Vec<u8>)> = Vec::new();
 
-            let mut updated_waiting_data: Vec<Address> = Vec::new();
-            for borrower in updated.clone().iter().skip(skip).take(batch) {
-                updated_waiting_data.push(borrower.clone());
-                let tokens = vec![Token::Address(*borrower)];
-                let brw: Vec<u8> = (*function.encode_input(&tokens).unwrap()).to_owned();
-                calls.push((self.previewer.address(), brw));
-            }
+        //     let mut updated_waiting_data: Vec<Address> = Vec::new();
+        //     for borrower in updated.clone().iter().skip(skip).take(batch) {
+        //         updated_waiting_data.push(borrower.clone());
+        //         let tokens = vec![Token::Address(*borrower)];
+        //         let brw: Vec<u8> = (*function.encode_input(&tokens).unwrap()).to_owned();
+        //         calls.push((self.previewer.address(), brw));
+        //     }
 
-            println!("multicall");
+        //     println!("multicall");
 
-            let response = self.multicall.aggregate(calls).call().await.unwrap();
+        //     let response = self.multicall.aggregate(calls).call().await.unwrap();
 
-            println!("Response: {:?}", response);
+        //     println!("Response: {:?}", response);
 
-            let responses = response.1;
+        //     let responses = response.1;
 
-            for r in responses.iter() {
-                let mut updateds = updated_waiting_data.iter();
+        //     let mut updateds = updated_waiting_data.iter();
+        //     for r in responses.iter() {
+        //         println!("Iterates over responses");
+        //         let payload: Vec<(
+        //             Address,
+        //             String,
+        //             Vec<(U256, (U256, U256))>,
+        //             Vec<(U256, (U256, U256))>,
+        //             U256,
+        //             U256,
+        //             U256,
+        //             U128,
+        //             U128,
+        //             u8,
+        //             bool,
+        //         )> = decode_function_data(function, r, false).unwrap();
 
-                println!("Iterates over responses");
-                let payload: Vec<(
-                    Address,
-                    String,
-                    Vec<(U256, (U256, U256))>,
-                    Vec<(U256, (U256, U256))>,
-                    U256,
-                    U256,
-                    U256,
-                    U128,
-                    U128,
-                    u8,
-                    bool,
-                )> = decode_function_data(function, r, false).unwrap();
+        //         println!("payload[{}]: {:?}", payload.len(), &payload);
 
-                println!("payload[{}]: {:?}", payload.len(), &payload);
+        //         // let _health_factor = 0; // payload.7.as_u64();
+        //         let borrower = updateds
+        //             .next()
+        //             .expect("Number of borrowers and responses doesn't match");
 
-                // let _health_factor = 0; // payload.7.as_u64();
-                let borrower = updateds
-                    .next()
-                    .expect("Number of borrowers and responses doesn't match");
+        //         let borrower_account = Borrower::new(borrower.clone(), payload);
 
-                let borrower_account = Borrower::new(borrower.clone(), payload);
+        //         if self.borrower_accounts.contains_key(&borrower) {
+        //             // dbg!(data.unwrap().0);
+        //             *self.borrower_accounts.get_mut(borrower).unwrap() = borrower_account;
+        //         } else {
+        //             self.borrower_accounts
+        //                 .insert(borrower.clone(), borrower_account);
+        //         }
+        //     }
 
-                if self.borrower_accounts.contains_key(&borrower) {
-                    // dbg!(data.unwrap().0);
-                    *self.borrower_accounts.get_mut(borrower).unwrap() = borrower_account;
-                } else {
-                    self.borrower_accounts
-                        .insert(borrower.clone(), borrower_account);
-                }
-            }
-
-            skip += batch;
-            println!("Accounts done: {} ", &skip);
-        }
+        //     skip += batch;
+        //     println!("Accounts done: {} ", &skip);
+        // }
 
         println!("\nTotal accs: {}", &self.borrower_accounts.len());
     }
@@ -292,8 +289,13 @@ impl<M: Middleware> FixedLender<M> {
             .expect("Method not found")
     }
 
-    pub fn liquidate(&self, borrower: &Borrower, position_assets: U256) -> ContractCall<M, ()> {
-        let max_assets_allowed: U256 = U256::zero();
+    pub fn liquidate(
+        &self,
+        borrower: &Borrower,
+        position_assets: U256,
+        max_assets_allowed: U256,
+    ) -> ContractCall<M, ()> {
+        println!("Liquidate from: {:?}", self.contract.address());
         self.contract
             .method(
                 "liquidate",
@@ -311,9 +313,9 @@ impl<M: Middleware> FixedLender<M> {
         &mut self,
         from_block: &U64,
         to_block: &U64,
-        price_oracle: &PriceOracle<N, S>,
-        path_finder: &PathFinder<M>,
-        jobs: &mut Vec<TerminatorJob>,
+        _price_oracle: &PriceOracle<N, S>,
+        _path_finder: &PathFinder<M>,
+        liquidation_candidates: &mut HashSet<Address>,
     ) -> Result<(), LiquidationError>
     where
         S: Signer,
@@ -321,56 +323,67 @@ impl<M: Middleware> FixedLender<M> {
     {
         // self.credit_filter.update(from_block, to_block).await;
 
-        self.update_accounts(from_block, to_block).await;
+        self.update_accounts(from_block, to_block, liquidation_candidates)
+            .await;
 
-        let new_ci = U256::from(0u64); // self.pool_service.get_new_ci().await;
+        // let new_ci = U256::from(0u64); // self.pool_service.get_new_ci().await;
 
-        println!("Credit manager: {:?}", &self.address());
+        // println!("Fixed Lender: {:?}", &self.address());
 
-        let mut accs_to_liquidate: HashSet<Borrower> = HashSet::new();
-        for borrower in self.borrower_accounts.iter_mut() {
-            let hf: U256 = borrower.1.compute_hf()?;
+        // let mut accs_to_liquidate: HashSet<Borrower> = HashSet::new();
+        // for borrower in self.borrower_accounts.iter_mut() {
+        //     let hf: U256 = borrower.1.compute_hf()?;
 
-            if hf <= U256::exp10(18) {
-                // if self.added_to_job.contains_key(&borrower.1.borrower()) {
-                //     let bad_debt_blocks = self.added_to_job[&ca.1.borrower] + 1;
-                //     *self.added_to_job.get_mut(&ca.1.borrower).unwrap() = bad_debt_blocks;
+        //     if hf <= U256::exp10(18) && borrower.1.debt() != U256::zero() {
+        //         // if self.added_to_job.contains_key(&borrower.1.borrower()) {
+        //         //     let bad_debt_blocks = self.added_to_job[&ca.1.borrower] + 1;
+        //         //     *self.added_to_job.get_mut(&ca.1.borrower).unwrap() = bad_debt_blocks;
 
-                //     if bad_debt_blocks >= 5 && bad_debt_blocks % 50 == 5 {
-                //         // Additional attempt to delete acc after 5 blocks
-                //         if bad_debt_blocks == 5 {
-                //             self.added_to_job.insert(*&ca.1.borrower, 0u32);
-                //         }
-                //         if bad_debt_blocks % 500 == 5 {
-                //             self.ampq_service
-                //                 .send(format!(
-                //                     "BAD DEBT!: Credit manager: {:?}\nborrower: {:?}\nCharts:{}/accounts/{:?}/{:?}\nHf: {}",
-                //                     &self.address, &ca.1.borrower,
-                //                     &self.charts_url,
-                //                     &self.address, &ca.1.borrower,
-                //                     &hf
-                //                 ))
-                //                 .await;
-                //         }
-                //     }
-                // } else {
-                //     self.added_to_job.insert(*&ca.1.borrower, 0u32);
-                // accs_to_liquidate.insert(borrower.1.borrower());
-                accs_to_liquidate.insert(borrower.1.clone());
-                // }
-            } else {
-                // self.added_to_job.remove(&ca.1.borrower);
-            }
-        }
+        //         //     if bad_debt_blocks >= 5 && bad_debt_blocks % 50 == 5 {
+        //         //         // Additional attempt to delete acc after 5 blocks
+        //         //         if bad_debt_blocks == 5 {
+        //         //             self.added_to_job.insert(*&ca.1.borrower, 0u32);
+        //         //         }
+        //         //         if bad_debt_blocks % 500 == 5 {
+        //         //             self.ampq_service
+        //         //                 .send(format!(
+        //         //                     "BAD DEBT!: Credit manager: {:?}\nborrower: {:?}\nCharts:{}/accounts/{:?}/{:?}\nHf: {}",
+        //         //                     &self.address, &ca.1.borrower,
+        //         //                     &self.charts_url,
+        //         //                     &self.address, &ca.1.borrower,
+        //         //                     &hf
+        //         //                 ))
+        //         //                 .await;
+        //         //         }
+        //         //     }
+        //         // } else {
+        //         //     self.added_to_job.insert(*&ca.1.borrower, 0u32);
+        //         // accs_to_liquidate.insert(borrower.1.borrower());
+        //         accs_to_liquidate.insert(borrower.1.clone());
+        //         // }
+        //     } else {
+        //         // self.added_to_job.remove(&ca.1.borrower);
+        //     }
+        // }
 
         // dbg!(&accs_to_liquidate);
 
-        println!("Starting liquidation process:");
+        // println!("Starting liquidation process:");
 
-        for acc in accs_to_liquidate {
-            // jobs.push(self.liquidate(acc)).await?;
-            self.liquidate(&acc, U256::from(0u64)).call().await.unwrap();
-        }
+        // for acc in accs_to_liquidate {
+        //     // jobs.push(self.liquidations
+        //     // (acc)).await?;
+        //     // println!("Liquidating:\n{:?}", &acc);
+        //     // let liquidate
+        //     //  = self.liquidate
+        //     // (&acc, acc.debt(), acc.debt());
+        //     // let tx = liquidate
+        //     // .send().await.unwrap();
+        //     // println!("Liquidation tx: {:?}", &tx);
+        //     // let receipt = tx.await;
+        //     // println!("Liquidation receipt: {:?}", &receipt);
+        //     // liquidation_candidates.insert(acc);
+        // }
         Ok(())
     }
 }

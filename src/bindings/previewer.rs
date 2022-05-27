@@ -1,8 +1,10 @@
 use std::fs::File;
 use std::io::BufReader;
+use std::ops::Add;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use ethers::prelude::builders::ContractCall;
 use ethers::prelude::*;
 use ethers::{
     contract::{self as ethers_contract},
@@ -69,5 +71,27 @@ impl<M: Middleware> Previewer<M> {
         };
         let contract = Contract::new(address, abi, client);
         Self { contract }
+    }
+
+    pub fn accounts(
+        &self,
+        borrower: Address,
+    ) -> ContractCall<
+        M,
+        Vec<(
+            Address,
+            String,
+            Vec<(U256, (U256, U256))>,
+            Vec<(U256, (U256, U256))>,
+            U256,
+            U256,
+            U256,
+            U128,
+            U128,
+            u8,
+            bool,
+        )>,
+    > {
+        self.contract.method("accounts", borrower).unwrap()
     }
 }
