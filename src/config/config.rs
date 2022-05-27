@@ -3,7 +3,7 @@ use ethers::prelude::Address;
 use std::env;
 use std::fmt::Debug;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub chain_id: u64,
     pub chain_id_name: String,
@@ -40,25 +40,25 @@ impl Default for Config {
 
         let (chain_id_name, eth_provider_rpc, etherscan, charts_url) = match chain_id {
             1 => (
-                "MAINNET",
+                "mainnet",
                 get_env_or_throw("ETH_MAINNET_PROVIDER"),
                 "https://etherscan.io",
                 "https://charts.gearbox.fi",
             ),
             4 => (
-                "RINKEBY",
+                "rinkeby",
                 get_env_or_throw("ETH_RINKEBY_PROVIDER"),
                 "https://rinkeby.etherscan.io",
                 "https://charts.rinkeby.gearbox.fi",
             ),
             42 => (
-                "KOVAN",
+                "kovan",
                 get_env_or_throw("ETH_KOVAN_PROVIDER"),
                 "https://kovan.etherscan.io",
                 "https://charts.kovan.gearbox.fi",
             ),
             1337 => (
-                "FORK",
+                "fork",
                 get_env_or_throw("ETH_FORK_PROVIDER"),
                 "https://etherscan.io",
                 "http://localhost:3002",

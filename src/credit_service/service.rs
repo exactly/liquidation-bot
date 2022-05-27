@@ -31,6 +31,7 @@ pub struct CreditService<M: Middleware, S: Signer> {
     etherscan: String,
     charts_url: String,
     liquidator_enabled: bool,
+    config: Config,
 }
 
 impl<M: Middleware, S: Signer> CreditService<M, S> {
@@ -68,6 +69,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             etherscan: config.etherscan.clone(),
             charts_url: config.charts_url.clone(),
             liquidator_enabled: config.liquidator_enabled,
+            config: config.clone(),
         }
     }
 
@@ -99,7 +101,10 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         // }
         for market in markets {
             let fixed_lender = FixedLender::new(
-                "node_modules/@exactly-finance/protocol/deployments/kovan/FixedLenderDAI.json",
+                &format!(
+                    "node_modules/@exactly-finance/protocol/deployments/{}/FixedLenderDAI.json",
+                    self.config.chain_id_name
+                ),
                 Some(market),
                 Arc::clone(&self.client),
                 Arc::clone(&self.previewer),

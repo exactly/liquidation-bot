@@ -20,11 +20,16 @@ mod addressprovider_mod {
     #[doc = "AddressProvider was auto-generated with ethers-rs Abigen. More information at: https://github.com/gakonst/ethers-rs"]
     use std::sync::Arc;
     use std::{fs::File, io::BufReader, num::ParseIntError};
+
+    use crate::config::Config;
+
     pub static ADDRESSPROVIDER_ABI: ethers_contract::Lazy<ethers_core::abi::Abi> =
         ethers_contract::Lazy::new(|| {
-            let file =
-                File::open("node_modules/@exactly-finance/protocol/deployments/kovan/Auditor.json")
-                    .unwrap();
+            let file = File::open(format!(
+                "node_modules/@exactly-finance/protocol/deployments/{}/Auditor.json",
+                "rinkeby"
+            ))
+            .unwrap();
             let reader = BufReader::new(file);
             let auditor: Value = serde_json::from_reader(reader).unwrap();
             let abi: Value = if let Value::Object(abi) = auditor {
@@ -55,6 +60,7 @@ mod addressprovider_mod {
     pub struct AddressProvider<M> {
         contract: ethers_contract::Contract<M>,
         block_number: u64,
+        config: Config,
     }
     impl<M> std::ops::Deref for AddressProvider<M> {
         type Target = ethers_contract::Contract<M>;
@@ -81,10 +87,12 @@ mod addressprovider_mod {
         #[doc = r" Creates a new contract instance with the specified `ethers`"]
         #[doc = r" client at the given `Address`. The contract derefs to a `ethers::Contract`"]
         #[doc = r" object"]
-        pub fn new(client: ::std::sync::Arc<M>) -> Self {
-            let file =
-                File::open("node_modules/@exactly-finance/protocol/deployments/kovan/Auditor.json")
-                    .unwrap();
+        pub fn new(config: Config, client: ::std::sync::Arc<M>) -> Self {
+            let file = File::open(format!(
+                "node_modules/@exactly-finance/protocol/deployments/{}/Auditor.json",
+                config.chain_id_name
+            ))
+            .unwrap();
             let reader = BufReader::new(file);
             let auditor: Value = serde_json::from_reader(reader).unwrap();
 
@@ -120,6 +128,7 @@ mod addressprovider_mod {
             Self {
                 contract: contract,
                 block_number: block_number,
+                config,
             }
         }
         pub fn get_block_number(&self) -> u64 {

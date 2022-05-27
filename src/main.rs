@@ -70,12 +70,15 @@ async fn main() -> Result<()> {
     // let auditor_address = decode_hex(&auditor_address[2..]).unwrap();
     // let auditor_address = H160::from_slice(auditor_address.as_slice());
 
-    let address_provider = AddressProvider::new(client.clone());
+    let address_provider = AddressProvider::new(config.clone(), client.clone());
 
     let data_compressor_addr = address_provider.get_data_compressor().call().await.unwrap();
 
     let previewer = Previewer::new(
-        "node_modules/@exactly-finance/protocol/deployments/kovan/Previewer.json",
+        &format!(
+            "node_modules/@exactly-finance/protocol/deployments/{}/Previewer.json",
+            config.chain_id_name
+        ),
         None,
         Arc::clone(&client),
     );
