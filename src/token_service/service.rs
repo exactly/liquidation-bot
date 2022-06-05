@@ -61,42 +61,42 @@ impl<M: Middleware> TokenService<M> {
         }
     }
 
-    pub async fn add_token(&mut self, addresses: &HashSet<Address>) {
-        for address in addresses {
-            if !self.tokens.contains_key(&address) {
-                let token_contract: ERC20<M> = ERC20::new(*address, self.client.clone());
-                let symbol = token_contract.symbol().call().await.unwrap();
-                let decimals = token_contract.decimals().call().await.unwrap();
-                self.tokens.insert(
-                    *address,
-                    Token {
-                        symbol,
-                        decimals,
-                        contract: token_contract,
-                    },
-                );
-            }
-        }
-    }
+    // pub async fn add_token(&mut self, addresses: &HashSet<Address>) {
+    //     for address in addresses {
+    //         if !self.tokens.contains_key(&address) {
+    //             let token_contract: ERC20<M> = ERC20::new(*address, self.client.clone());
+    //             let symbol = token_contract.symbol().call().await.unwrap();
+    //             let decimals = token_contract.decimals().call().await.unwrap();
+    //             self.tokens.insert(
+    //                 *address,
+    //                 Token {
+    //                     symbol,
+    //                     decimals,
+    //                     contract: token_contract,
+    //                 },
+    //             );
+    //         }
+    //     }
+    // }
 
     // pub fn get_token_addresses(&self) -> Vec<&Address> {
     //     Vec::from_iter(self.tokens.keys())
     // }
 
-    pub async fn get_balance(&self, token: &Address, address: &Address) -> U256 {
-        self.tokens
-            .get(&token)
-            .expect(format!("Unknown token {}", &token).as_str())
-            .balance_of(address)
-            .await
-    }
+    // pub async fn get_balance(&self, token: &Address, address: &Address) -> U256 {
+    //     self.tokens
+    //         .get(&token)
+    //         .expect(format!("Unknown token {}", &token).as_str())
+    //         .balance_of(address)
+    //         .await
+    // }
 
-    pub fn format_bn(&self, token: &Address, amount: &U256) -> String {
-        self.tokens
-            .get(&token)
-            .expect(format!("Unknown token {}", &token).as_str())
-            .format_bn(amount)
-    }
+    // pub fn format_bn(&self, token: &Address, amount: &U256) -> String {
+    //     self.tokens
+    //         .get(&token)
+    //         .expect(format!("Unknown token {}", &token).as_str())
+    //         .format_bn(amount)
+    // }
 
     pub fn symbol(&self, token: &Address) -> &String {
         &self

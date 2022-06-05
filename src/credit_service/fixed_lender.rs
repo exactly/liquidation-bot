@@ -5,7 +5,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use ethers::abi::Token;
 use ethers::prelude::builders::ContractCall;
 use ethers::prelude::*;
 use ethers::{
@@ -21,7 +20,6 @@ use crate::config::config::str_to_address;
 use crate::errors::LiquidationError;
 use crate::path_finder::PathFinder;
 use crate::price_oracle::oracle::PriceOracle;
-use crate::terminator_service::terminator::TerminatorJob;
 
 use super::Borrower;
 
