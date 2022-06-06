@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use convert_case::{Case, Casing};
 use ethers::contract::Abigen;
 use std::fs;
@@ -21,10 +22,15 @@ fn main() -> anyhow::Result<()> {
             dbg!(&path, &contract_name, &binding);
 
             let abi = fs::read_to_string(path).expect("Something went wrong reading the file");
-            let bindings = Abigen::new(&contract_name, abi)?.generate()?;
+            let bindings = Abigen::new(&contract_name, abi)
+                .map_err(|_| anyhow!("Error"))?
+                .generate()
+                .map_err(|_| anyhow!("Error"))?;
 
             // print to stdout if no output arg is given
-            bindings.write_to_file(&binding)?;
+            bindings
+                .write_to_file(&binding)
+                .map_err(|_| anyhow!("Error"))?;
         }
     }
 

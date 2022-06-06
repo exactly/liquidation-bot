@@ -11,9 +11,9 @@ pub struct TerminatorJob {
     pub(crate) borrower: Address,
     pub(crate) router: Address,
     pub(crate) paths: Vec<(
-        ethers_core::types::U256,
-        Vec<ethers_core::types::Address>,
-        ethers_core::types::U256,
+        ethers::core::types::U256,
+        Vec<ethers::core::types::Address>,
+        ethers::core::types::U256,
     )>,
     pub(crate) yearn_tokens: Vec<Address>,
     pub repay_amount: U256,

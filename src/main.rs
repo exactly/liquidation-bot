@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
 
     let client: ethers::prelude::SignerMiddleware<
         ethers::prelude::Provider<ethers::prelude::Http>,
-        ethers::prelude::Wallet<ethers_core::k256::ecdsa::SigningKey>,
+        ethers::prelude::Wallet<ethers::core::k256::ecdsa::SigningKey>,
     > = SignerMiddleware::new(provider.clone(), w2);
 
     let client = Arc::new(client);

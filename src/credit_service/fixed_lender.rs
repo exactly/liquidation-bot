@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
+use ethers::abi::Contract;
 use ethers::prelude::builders::ContractCall;
 use ethers::prelude::*;
 use ethers::{
@@ -262,7 +263,7 @@ impl<M: Middleware> FixedLender<M> {
         } else {
             address_parsed
         };
-        let contract = Contract::new(address, abi, client.clone());
+        let contract = ethers::contract::Contract::new(address, abi, client.clone());
         let borrower_accounts = HashMap::new();
         let multicall = Multicall2::new(
             str_to_address("0x5ba1e12693dc8f9c48aad8770482f4739beed696"),

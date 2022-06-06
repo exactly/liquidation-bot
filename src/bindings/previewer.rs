@@ -3,6 +3,7 @@ use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use ethers::abi::Contract;
 use ethers::prelude::builders::ContractCall;
 use ethers::prelude::*;
 use ethers::{
@@ -14,7 +15,7 @@ use serde_json::Value;
 
 #[derive(Debug)]
 pub struct Previewer<M> {
-    contract: ethers_contract::Contract<M>,
+    contract: ethers::contract::Contract<M>,
 }
 
 impl<M> std::ops::Deref for Previewer<M> {
@@ -68,7 +69,8 @@ impl<M: Middleware> Previewer<M> {
             println!("Parsed address: {:?}", address_parsed);
             address_parsed
         };
-        let contract = Contract::new(address, abi, client);
+        let contract = ethers::contract::Contract::new(address, abi, client);
+        // let contract = ethers::contract::Contract::load(reader).unwrap();
         Self { contract }
     }
 

@@ -203,6 +203,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
     fn parse_events(logs: Vec<(FixedLenderEvents, LogMeta)>) -> HashMap<Address, Borrower> {
         let mut borrowers: HashMap<Address, Borrower> = HashMap::new();
         for (event, meta) in logs {
+            println!("Metadata {:?}", meta);
             match event {
                 FixedLenderEvents::RoleGrantedFilter(_data) => {}
                 FixedLenderEvents::RoleAdminChangedFilter(_data) => {}
@@ -212,13 +213,14 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                 FixedLenderEvents::SmartPoolEarningsAccruedFilter(_data) => {}
                 FixedLenderEvents::PausedFilter(_data) => {}
                 FixedLenderEvents::UnpausedFilter(_data) => {}
-                FixedLenderEvents::ApprovalFilter(_) => todo!(),
+                FixedLenderEvents::ApprovalFilter(_) => {}
 
                 FixedLenderEvents::TransferFilter(data) => {
                     if data.from != Address::zero() {}
                     if data.to != Address::zero() {}
                 }
                 FixedLenderEvents::DepositFilter(data) => {
+                    println!("Deposit {:?}", data);
                     let borrower = if borrowers.contains_key(&data.owner) {
                         borrowers.get_mut(&data.owner).unwrap()
                     } else {
@@ -230,42 +232,49 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                     borrower.deposit(data, &meta.address);
                 }
                 FixedLenderEvents::WithdrawFilter(data) => {
+                    println!("Withdraw {:?}", data);
                     if borrowers.contains_key(&data.owner) {
                         let borrower = borrowers.get_mut(&data.owner).unwrap();
                         borrower.withdraw(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::DepositAtMaturityFilter(data) => {
+                    println!("DepositAtMaturity {:?}", data);
                     if borrowers.contains_key(&data.owner) {
                         let borrower = borrowers.get_mut(&data.owner).unwrap();
                         borrower.deposit_at_maturity(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::WithdrawAtMaturityFilter(data) => {
+                    println!("WithdrawAtMaturity {:?}", data);
                     if borrowers.contains_key(&data.owner) {
                         let borrower = borrowers.get_mut(&data.owner).unwrap();
                         borrower.withdraw_at_maturity(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::BorrowAtMaturityFilter(data) => {
+                    println!("BorrowAtMaturity {:?}", data);
                     if borrowers.contains_key(&data.borrower) {
                         let borrower = borrowers.get_mut(&data.borrower).unwrap();
                         borrower.borrow_at_maturity(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::RepayAtMaturityFilter(data) => {
+                    println!("RepayAtMaturity {:?}", data);
                     if borrowers.contains_key(&data.borrower) {
                         let borrower = borrowers.get_mut(&data.borrower).unwrap();
                         borrower.repay_at_maturity(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::LiquidateBorrowFilter(data) => {
+                    println!("LiquidateBorrow {:?}", data);
                     if borrowers.contains_key(&data.borrower) {
                         let borrower = borrowers.get_mut(&data.borrower).unwrap();
                         borrower.liquidate_borrow(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::AssetSeizedFilter(data) => {
+                    println!("AssetSeized {:?}", data);
                     if borrowers.contains_key(&data.borrower) {
                         let borrower = borrowers.get_mut(&data.borrower).unwrap();
                         borrower.asset_seized(data, &meta.address);
@@ -290,15 +299,11 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             return Ok(());
         }
 
-        let keys: Vec<Address> = self.fixed_lenders.keys().map(|k| k.clone()).collect();
-        let test: ValueOrArray<Address> = ValueOrArray::Array(keys);
-        let mut f = Filter::new();
-        f = f.from_block(self.last_block_synced + U64::from(1u64));
-        f = f.to_block(&to);
-        f = f.address(test);
-        // let mut a: ethers::prelude::Filter = Default::default();
-        // a = a.from_block(self.last_block_synced + U64::from(1u64));
-        // a = a.to_block(&to);
+        let markets: Vec<Address> = self.fixed_lenders.keys().map(|k| k.clone()).collect();
+        let f = Filter::new()
+            .from_block(self.last_block_synced + U64::from(1u64))
+            .to_block(&to)
+            .address(markets);
         let logs = self
             .client
             .provider()
