@@ -23,7 +23,6 @@ pub struct DepositAtMaturityFilter {
     pub fee: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(
     name = "WithdrawAtMaturity",
@@ -38,7 +37,7 @@ pub struct WithdrawAtMaturityFilter {
     #[ethevent(indexed)]
     pub owner: Address,
     pub assets: U256,
-    pub assetsDiscounted: U256,
+    pub assets_discounted: U256,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
@@ -58,7 +57,6 @@ pub struct BorrowAtMaturityFilter {
     pub fee: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(
     name = "RepayAtMaturity",
@@ -72,10 +70,9 @@ pub struct RepayAtMaturityFilter {
     #[ethevent(indexed)]
     pub borrower: Address,
     pub assets: U256,
-    pub debtCovered: U256,
+    pub debt_covered: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(
     name = "LiquidateBorrow",
@@ -88,8 +85,8 @@ pub struct LiquidateBorrowFilter {
     pub borrower: Address,
     pub assets: U256,
     #[ethevent(indexed)]
-    pub collateralFixedLender: Address,
-    pub seizedAssets: U256,
+    pub collateral_fixed_lender: Address,
+    pub seized_assets: U256,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
@@ -102,32 +99,29 @@ pub struct AssetSeizedFilter {
     pub assets: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(
     name = "AccumulatedEarningsSmoothFactorSet",
     abi = "AccumulatedEarningsSmoothFactorSet(uint256)"
 )]
 pub struct AccumulatedEarningsSmoothFactorSetFilter {
-    pub newAccumulatedEarningsSmoothFactor: U256,
+    pub new_accumulated_earnings_smooth_factor: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(
     name = "SmartPoolEarningsAccrued",
     abi = "SmartPoolEarningsAccrued(uint256,uint256)"
 )]
 pub struct SmartPoolEarningsAccruedFilter {
-    pub previousAssets: U256,
+    pub previous_assets: U256,
     pub earnings: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "MaxFuturePoolsUpdate", abi = "MaxFuturePoolsUpdate(uint256)")]
 pub struct MaxFuturePoolsUpdatedFilter {
-    pub newMaxFuturePools: U256,
+    pub new_max_future_pools: U256,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
@@ -177,7 +171,6 @@ pub struct ApprovalFilter {
     pub amount: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "RoleGranted", abi = "RoleGranted(bytes32,address,address)")]
 pub struct RoleGrantedFilter {
@@ -189,7 +182,6 @@ pub struct RoleGrantedFilter {
     pub sender: Address,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(
     name = "RoleAdminChanged",
@@ -199,12 +191,11 @@ pub struct RoleAdminChangedFilter {
     #[ethevent(indexed)]
     pub role: H256,
     #[ethevent(indexed)]
-    pub previousAdminRole: H256,
+    pub previous_admin_role: H256,
     #[ethevent(indexed)]
-    pub newAdminRole: H256,
+    pub new_admin_role: H256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "RoleRevoked", abi = "RoleRevoked(bytes32,address,address)")]
 pub struct RoleRevokedFilter {
@@ -216,14 +207,12 @@ pub struct RoleRevokedFilter {
     pub sender: Address,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "Paused", abi = "Paused(address)")]
 pub struct PausedFilter {
     pub account: Address,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "Unpaused", abi = "Unpaused(address)")]
 pub struct UnpausedFilter {
@@ -231,15 +220,13 @@ pub struct UnpausedFilter {
 }
 /////////////////////
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
-#[ethevent(name = "MarketListed", abi = "MarketListed(address,uint256)")]
+#[ethevent(name = "MarketListed", abi = "MarketListed(address,uint8)")]
 pub struct MarketListedFilter {
     pub fixed_lender: Address,
-    pub decimals: U256,
+    pub decimals: u8,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "MarketEntered", abi = "MarketEntered(address,address)")]
 pub struct MarketEnteredFilter {
@@ -249,7 +236,6 @@ pub struct MarketEnteredFilter {
     pub account: Address,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "MarketExited", abi = "MarketExited(address,address)")]
 pub struct MarketExitedFilter {
@@ -259,14 +245,12 @@ pub struct MarketExitedFilter {
     pub account: Address,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "OracleSet", abi = "OracleSet(address)")]
 pub struct OracleSetFilter {
     pub new_oracle: Address,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(
     name = "LiquidationINcentiveSet",
@@ -276,55 +260,49 @@ pub struct LiquidationIncentiveSetFilter {
     pub new_liquidation_incentive: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "BorrowCapUpdated", abi = "BorrowCapUpdated(address,uint256)")]
 pub struct BorrowCapUpdatedFilter {
     #[ethevent(indexed)]
-    fixed_lender: Address,
-    new_borrow_cap: U256,
+    pub fixed_lender: Address,
+    pub new_borrow_cap: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "AdjustFactorSet", abi = "AdjustFactorSet(address,uint256)")]
 pub struct AdjustFactorSetFilter {
     #[ethevent(indexed)]
-    fixed_lender: Address,
-    new_adjust_factor: U256,
+    pub fixed_lender: Address,
+    pub new_adjust_factor: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "InterestRateModelSet", abi = "InterestRateModelSet(address)")]
 pub struct InterestRateModelSetFilter {
     #[ethevent(indexed)]
-    newInterestRateModel: Address,
+    pub new_interest_rate_model: Address,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "PenaltyRateSet", abi = "PenaltyRateSet(uint256)")]
 pub struct PenaltyRateSetFilter {
-    newPenaltyRate: U256,
+    pub new_penalty_rate: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(
     name = "SmartPoolReserveFactorSet",
     abi = "SmartPoolReserveFactorSet(uint256)"
 )]
 pub struct SmartPoolReserveFactorSetFilter {
-    newSmartPoolReserveFactor: U256,
+    new_smart_pool_reserve_factor: U256,
 }
 
-#[allow(non_snake_case)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers_contract :: EthEvent)]
 #[ethevent(name = "DampSpeedUpdated", abi = "DampSpeedUpdated(uint256,uint256)")]
 pub struct DampSpeedUpdatedFilter {
-    newDampSpeedUp: U256,
-    newDampSpeedDown: U256,
+    new_damp_speed_up: U256,
+    new_damp_speed_down: U256,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

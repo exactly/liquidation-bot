@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{thread, time};
 
 use ethers::abi::{RawLog, Token};
@@ -9,7 +9,7 @@ use ethers::core::types::{Address, H160, U128, U256, U64};
 use ethers::core::types::{Filter, ValueOrArray};
 use ethers::prelude::builders::ContractCall;
 use ethers::prelude::{
-    decode_function_data, BlockNumber, Chain, ContractError, EthLogDecode, Http, LogMeta,
+    abigen, decode_function_data, BlockNumber, Chain, ContractError, EthLogDecode, Http, LogMeta,
     Middleware, Provider, Signer, SignerMiddleware, StreamExt,
 };
 
@@ -28,8 +28,15 @@ use crate::token_service::service::TokenService;
 
 use super::BorrowerData;
 
+abigen!(
+    ExactlyOracle,
+    // TODO make it works on kovan as well
+    "node_modules/@exactly-finance/protocol/deployments/rinkeby/ExactlyOracle.json",
+    event_derives(serde::Deserialize, serde::Serialize)
+);
+
 pub struct CreditService<M: Middleware, S: Signer> {
-    fixed_lenders: HashMap<Address, FixedLender<SignerMiddleware<M, S>>>,
+    fixed_lenders: HashMap<Address, Arc<Mutex<FixedLender>>>,
     token_service: TokenService<SignerMiddleware<M, S>>,
     price_oracle: PriceOracle<M, S>,
     previewer: Arc<Previewer<SignerMiddleware<M, S>>>,
@@ -125,18 +132,11 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             self.client.signer().address()
         );
         for market in markets {
-            let fixed_lender = FixedLender::new(
-                &format!(
-                    "node_modules/@exactly-finance/protocol/deployments/{}/FixedLenderDAI.json",
-                    self.config.chain_id_name
-                ),
-                Some(market),
-                Arc::clone(&self.client),
-                Arc::clone(&self.previewer),
-                Arc::clone(&auditor),
-            );
+            println!("Adding market {:?}", market);
+            let fixed_lender = FixedLender::new(market);
             if !self.fixed_lenders.contains_key(&market) {
-                self.fixed_lenders.insert(market, fixed_lender);
+                self.fixed_lenders
+                    .insert(market, Arc::new(Mutex::new(fixed_lender)));
             };
         }
         // println!("total assets {:?}", total_assets);
@@ -193,25 +193,48 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         }
     }
 
-    pub fn get_tokens(&self) -> HashSet<Address> {
-        let mut set: HashSet<Address> = HashSet::new();
+    // pub fn get_tokens(&self) -> HashSet<Address> {
+    //     let mut set: HashSet<Address> = HashSet::new();
 
-        for (_, fixed_lender) in self.fixed_lenders.iter() {
-            for token in fixed_lender.allowed_tokens.iter() {
-                set.insert(*token);
-            }
+    //     for (_, fixed_lender) in self.fixed_lenders.iter() {
+    //         for token in fixed_lender.allowed_tokens.iter() {
+    //             set.insert(*token);
+    //         }
+    //     }
+
+    //     set
+    // }
+
+    async fn update_preices(
+        &self,
+        oracle: Address,
+        markets: &HashMap<Address, Arc<Mutex<FixedLender>>>,
+        block: U64,
+    ) {
+        let contract = ExactlyOracle::new(oracle, self.client.clone());
+        println!("\nUpdating prices:\n");
+        for market in markets.values() {
+            let mut market = market.lock().unwrap();
+            let oracle_price = contract
+                .get_asset_price(market.address())
+                .block(block)
+                .call()
+                .await
+                .unwrap();
+            market.set_oracle_price(Some(oracle_price));
+            println!("Market {:?} value {:?}", market.address(), oracle_price);
         }
-
-        set
     }
 
     async fn parse_events(
-        &self,
+        &mut self,
         logs: Vec<(FixedLenderEvents, LogMeta)>,
     ) -> HashMap<Address, Borrower> {
         let mut borrowers: HashMap<Address, Borrower> = HashMap::new();
         let mut block = U64::from(0u64);
-        let mut markets = HashSet::<Address>::new();
+        let mut markets = HashMap::<Address, Arc<Mutex<FixedLender>>>::new();
+        let mut oracle: Option<Address> = None;
+        // let mut markets = self.fixed_lenders.clone();
         for (event, meta) in logs {
             print!("Fixed Lender {:?} - ", meta.address);
             if meta.block_number > block {
@@ -225,6 +248,12 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                             block,
                         )
                         .await;
+                    println!("Does it validate the oracle?");
+                    if let Some(oracle) = oracle {
+                        println!("It will validate the oracle");
+                        self.update_preices(oracle, &markets, block).await;
+                    }
+
                     Self::compare_positions(&previewer_borrowers, &borrowers);
                 }
                 block = meta.block_number;
@@ -237,12 +266,16 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                 // FixedLenderEvents::PausedFilter(_) => {}
                 // FixedLenderEvents::UnpausedFilter(_) => {}
                 // FixedLenderEvents::ApprovalFilter(_) => {}
-                // FixedLenderEvents::OracleUpdatedFilter(_) => {}
                 // FixedLenderEvents::LiquidationIncentiveUpdatedFilter(_) => {}
                 // FixedLenderEvents::BorrowCapUpdatedFilter(_) => {}
                 // FixedLenderEvents::InterestRateModelUpdatedFilter(_) => {}
                 // FixedLenderEvents::SmartPoolReserveFactorUpdatedFilter(_) => {}
                 // FixedLenderEvents::DampSpeedUpdatedFilter(_) => {}
+                FixedLenderEvents::OracleSetFilter(data) => {
+                    println!("OracleSetFilter\n{:?}\n", data);
+                    oracle = Some(data.new_oracle);
+                }
+
                 FixedLenderEvents::SmartPoolEarningsAccruedFilter(data) => {
                     println!("SmartPoolEarningsAccruedFilter\n{:?}\n", data);
                 }
@@ -253,7 +286,12 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
 
                 FixedLenderEvents::MarketListedFilter(data) => {
                     println!("MarketListedFilter\n{:?}\n", data);
-                    markets.insert(data.fixed_lender);
+                    if !markets.contains_key(&data.fixed_lender) {
+                        let mut market = FixedLender::new(data.fixed_lender.clone());
+                        markets.insert(data.fixed_lender.clone(), Arc::new(Mutex::new(market)));
+                    }
+                    let market = markets.get_mut(&data.fixed_lender).unwrap();
+                    market.lock().unwrap().set_decimals(Some(data.decimals));
                 }
 
                 FixedLenderEvents::TransferFilter(data) => {
@@ -264,7 +302,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                 }
                 FixedLenderEvents::DepositFilter(data) => {
                     println!("Deposit\n{:?}\n", data);
-                    let mut borrower = Self::create_borrower(&mut borrowers, &data.owner, &markets);
+                    let borrower = Self::create_borrower(&mut borrowers, &data.owner, &markets);
                     borrower.deposit(data, &meta.address);
                 }
                 FixedLenderEvents::WithdrawFilter(data) => {
@@ -317,10 +355,28 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
 
                 FixedLenderEvents::AdjustFactorSetFilter(data) => {
                     println!("AdjustFactorSetFilter\n{:?}\n", data);
+
+                    if let Some(market) = markets.get_mut(&data.fixed_lender) {
+                        market
+                            .lock()
+                            .unwrap()
+                            .set_adjust_factor(Some(data.new_adjust_factor));
+                    }
                 }
 
                 FixedLenderEvents::PenaltyRateSetFilter(data) => {
                     println!("PenaltyRateUpdatedFilter\n{:?}\n", data);
+
+                    if !markets.contains_key(&meta.address) {
+                        let mut market = FixedLender::new(meta.address);
+                        markets.insert(meta.address, Arc::new(Mutex::new(market)));
+                    }
+                    let market = markets.get_mut(&meta.address).unwrap();
+
+                    market
+                        .lock()
+                        .unwrap()
+                        .set_penalty_rate(Some(data.new_penalty_rate));
                 }
 
                 FixedLenderEvents::MarketEnteredFilter(data) => {
@@ -431,7 +487,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         // let liquiditations = self
         //     .update_borrowers_position(&mut liquidation_candidates)
         //     .await;
-        let mut liquidations: HashMap<Address, Borrower> = HashMap::new();
+        let liquidations: HashMap<Address, Borrower> = HashMap::new();
         for (address, borrower) in borrowers.iter_mut() {
             println!("borrower {:?}", borrower);
             // let hf = borrower.compute_hf();
@@ -585,7 +641,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                     .next()
                     .expect("Number of borrowers and responses doesn't match");
 
-                let mut borrower_account = Borrower::new(borrower.clone(), payload);
+                let mut borrower_account = Borrower::new_from_previewer(borrower.clone(), payload);
 
                 let hf: U256 = borrower_account.compute_hf().unwrap();
 
@@ -604,21 +660,21 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         liquidations
     }
 
-    async fn liquidate(&self, liquidations: &HashMap<Address, Borrower>) {
-        for (_, borrower) in liquidations {
-            println!("Liquidating borrower {:?}", borrower);
-            if let Some(address) = &borrower.fixed_lender_to_liquidate() {
-                println!("Liquidating on fixed lender {:?}", address);
-                let liquidate = self.fixed_lenders[address].liquidate(
-                    &borrower,
-                    borrower.debt(),
-                    borrower.debt(),
-                );
-                let tx = liquidate.send().await.unwrap();
-                let receipt = tx.await.unwrap();
-                println!("Liquidation tx {:?}", receipt);
-            }
-        }
+    async fn liquidate(&self, _liquidations: &HashMap<Address, Borrower>) {
+        // for (_, borrower) in liquidations {
+        //     println!("Liquidating borrower {:?}", borrower);
+        //     if let Some(address) = &borrower.fixed_lender_to_liquidate() {
+        //         println!("Liquidating on fixed lender {:?}", address);
+        //         let liquidate = self.fixed_lenders[address].liquidate(
+        //             &borrower,
+        //             borrower.debt(),
+        //             borrower.debt(),
+        //         );
+        //         let tx = liquidate.send().await.unwrap();
+        //         let receipt = tx.await.unwrap();
+        //         println!("Liquidation tx {:?}", receipt);
+        //     }
+        // }
     }
 
     async fn multicall_previewer(
@@ -684,7 +740,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                     .next()
                     .expect("Number of borrowers and responses doesn't match");
 
-                let borrower_account = Borrower::new(borrower.clone(), payload);
+                let borrower_account = Borrower::new_from_previewer(borrower.clone(), payload);
 
                 if positions.contains_key(&borrower) {
                     *positions.get_mut(borrower).unwrap() = borrower_account;
@@ -716,11 +772,11 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                         event_borrower.data().len()
                     );
                 } else if previewer_borrower.data().len() == 0 {
-                    println!("No fixed lenders.");
+                    println!("No markets.");
                 } else {
                     for (_, data) in previewer_borrower.data().iter() {
-                        if let Some(fixed_lender) = event_borrower.data().get(&data.fixed_lender())
-                        {
+                        let market_address = data.fixed_lender().lock().unwrap().address();
+                        if let Some(fixed_lender) = event_borrower.data().get(&market_address) {
                             println!("Fixed lender: {:?}", &fixed_lender.fixed_lender());
                             let mut fixed_lender_correct = true;
                             if &data.smart_pool_assets() != &fixed_lender.smart_pool_assets() {
@@ -741,24 +797,24 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                                 println!("    Previewer: {:?}", &data.oracle_price());
                                 println!("    Event    : {:?}", &fixed_lender.oracle_price());
                             }
-                            if &data.penalty_rate() != &fixed_lender.penalty_rate() {
-                                fixed_lender_correct = false;
-                                println!("  penalty_rate:");
-                                println!("    Previewer: {:?}", &data.penalty_rate());
-                                println!("    Event    : {:?}", &fixed_lender.penalty_rate());
-                            }
-                            if &data.adjust_factor() != &fixed_lender.adjust_factor() {
-                                fixed_lender_correct = false;
-                                println!("  adjust_factor:");
-                                println!("    Previewer: {:?}", &data.adjust_factor());
-                                println!("    Event    : {:?}", &fixed_lender.adjust_factor());
-                            }
-                            if &data.decimals() != &fixed_lender.decimals() {
-                                fixed_lender_correct = false;
-                                println!("  decimals:");
-                                println!("    Previewer: {:?}", &data.decimals());
-                                println!("    Event    : {:?}", &fixed_lender.decimals());
-                            }
+                            // if &data.penalty_rate() != &fixed_lender.penalty_rate() {
+                            fixed_lender_correct = false;
+                            println!("  penalty_rate:");
+                            println!("    Previewer: {:?}", &data.penalty_rate());
+                            println!("    Event    : {:?}", &fixed_lender.penalty_rate());
+                            // }
+                            // if &data.adjust_factor() != &fixed_lender.adjust_factor() {
+                            fixed_lender_correct = false;
+                            println!("  adjust_factor:");
+                            println!("    Previewer: {:?}", &data.adjust_factor());
+                            println!("    Event    : {:?}", &fixed_lender.adjust_factor());
+                            // }
+                            // if &data.decimals() != &fixed_lender.decimals() {
+                            fixed_lender_correct = false;
+                            println!("  decimals:");
+                            println!("    Previewer: {:?}", &data.decimals());
+                            println!("    Event    : {:?}", &fixed_lender.decimals());
+                            // }
                             if &data.is_collateral() != &fixed_lender.is_collateral() {
                                 fixed_lender_correct = false;
                                 println!("  is_collateral:");
@@ -834,16 +890,21 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
     fn create_borrower<'a>(
         borrowers: &'a mut HashMap<H160, Borrower>,
         borrower_address: &Address,
-        markets: &HashSet<H160>,
+        markets: &HashMap<Address, Arc<Mutex<FixedLender>>>,
     ) -> &'a mut Borrower {
         let borrower = if borrowers.contains_key(&borrower_address) {
             println!("Creating borrower\n{:?}\n", &borrower_address);
             borrowers.get_mut(borrower_address).unwrap()
         } else {
             println!("Creating borrower\n{:?}\n", borrower_address);
-            let borrower_data = Vec::<BorrowerData>::new();
-            let mut borrower = Borrower::new_borrower_data(borrower_address.clone(), borrower_data);
-            borrower.add_markets(markets);
+            let mut borrower_markets = Vec::<BorrowerData>::new();
+            for (_, market) in markets {
+                let borrower_market = BorrowerData::new_with_market(Arc::clone(&market));
+                borrower_markets.push(borrower_market);
+            }
+            let mut borrower =
+                Borrower::new_borrower_markets(borrower_address.clone(), borrower_markets);
+            // borrower.add_markets(marksets);
             borrowers.insert(borrower_address.clone(), borrower);
             borrowers.get_mut(borrower_address).unwrap()
         };
