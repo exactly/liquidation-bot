@@ -171,11 +171,22 @@ impl<M: Middleware> FixedLender<M> {
                 FixedLenderEvents::AssetSeizedFilter(data) => {
                     liquidation_candidates.insert(data.borrower);
                 }
-                FixedLenderEvents::AccumulatedEarningsSmoothFactorUpdatedFilter(_data) => {}
+                FixedLenderEvents::AccumulatedEarningsSmoothFactorSetFilter(_data) => {}
                 FixedLenderEvents::MaxFuturePoolsUpdatedFilter(_data) => {}
                 FixedLenderEvents::SmartPoolEarningsAccruedFilter(_data) => {}
                 FixedLenderEvents::PausedFilter(_data) => {}
                 FixedLenderEvents::UnpausedFilter(_data) => {}
+                FixedLenderEvents::MarketListedFilter(_) => {}
+                FixedLenderEvents::MarketEnteredFilter(_) => {}
+                FixedLenderEvents::MarketExitedFilter(_) => {}
+                FixedLenderEvents::OracleSetFilter(_) => {}
+                FixedLenderEvents::LiquidationIncentiveSetFilter(_) => {}
+                FixedLenderEvents::BorrowCapUpdatedFilter(_) => {}
+                FixedLenderEvents::AdjustFactorSetFilter(_) => {}
+                FixedLenderEvents::InterestRateModelSetFilter(_) => {}
+                FixedLenderEvents::PenaltyRateSetFilter(_) => {}
+                FixedLenderEvents::SmartPoolReserveFactorSetFilter(_) => {}
+                FixedLenderEvents::DampSpeedUpdatedFilter(_) => {}
             }
         }
         // println!("Got operations: {}", &counter);

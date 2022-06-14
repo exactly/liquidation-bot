@@ -45,6 +45,7 @@ mod multicall2_mod {
             address: T,
             client: ::std::sync::Arc<M>,
         ) -> Self {
+            println!("\nParsed ABI Multicall{:?}\n", &MULTICALL2_ABI);
             let contract =
                 ethers_contract::Contract::new(address.into(), MULTICALL2_ABI.clone(), client);
             Self(contract)
@@ -52,7 +53,7 @@ mod multicall2_mod {
         #[doc = "Calls the contract's `aggregate` (0x252dba42) function"]
         pub fn aggregate(
             &self,
-            calls: Vec<(ethers_core::types::Address, Vec<u8>)>,
+            calls: Vec<(ethers_core::types::Address, Address)>,
         ) -> ethers_contract::builders::ContractCall<M, (ethers_core::types::U256, Vec<Vec<u8>>)>
         {
             self.0

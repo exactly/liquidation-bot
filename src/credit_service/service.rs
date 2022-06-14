@@ -1,18 +1,21 @@
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::{thread, time};
 
 use ethers::abi::{RawLog, Token};
+use ethers::contract::{Contract, Multicall};
 use ethers::core::types::{Address, H160, U128, U256, U64};
 use ethers::core::types::{Filter, ValueOrArray};
+use ethers::prelude::builders::ContractCall;
 use ethers::prelude::{
-    decode_function_data, ContractError, EthLogDecode, Http, LogMeta, Middleware, Provider, Signer,
-    SignerMiddleware, StreamExt,
+    decode_function_data, BlockNumber, Chain, ContractError, EthLogDecode, Http, LogMeta,
+    Middleware, Provider, Signer, SignerMiddleware, StreamExt,
 };
 
 use crate::ampq_service::AmpqService;
 use crate::bindings::multicall_2::Multicall2;
-use crate::bindings::{AddressProvider, FixedLenderEvents, Previewer};
+use crate::bindings::{AddressProvider, FixedLenderEvents, Previewer, PreviewerData};
 use crate::config::config::str_to_address;
 use crate::config::Config;
 use crate::credit_service::{Borrower, FixedLender};
@@ -87,7 +90,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             charts_url: config.charts_url.clone(),
             liquidator_enabled: config.liquidator_enabled,
             config: config.clone(),
-            multicall,
+            multicall: Arc::clone(&multicall),
         }
     }
 
@@ -160,9 +163,11 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         //     .send(String::from("Liquidation bot started!"))
         //     .await;
 
-        self.last_block_synced = block_number;
+        self.last_block_synced = block_number - 1u64;
 
-        self.update().await;
+        let auditor = Arc::clone(&auditor);
+
+        self.update(&auditor).await;
 
         let watcher = self.client.clone();
         let mut on_block = watcher
@@ -172,7 +177,7 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             .unwrap()
             .stream();
         while on_block.next().await.is_some() {
-            match self.update().await {
+            match self.update(&auditor).await {
                 Err(e) => {
                     println!("{}", &e);
                     self.ampq_service.send(e.to_string()).await;
@@ -200,85 +205,141 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         set
     }
 
-    fn parse_events(logs: Vec<(FixedLenderEvents, LogMeta)>) -> HashMap<Address, Borrower> {
+    async fn parse_events(
+        &self,
+        logs: Vec<(FixedLenderEvents, LogMeta)>,
+    ) -> HashMap<Address, Borrower> {
         let mut borrowers: HashMap<Address, Borrower> = HashMap::new();
+        let mut block = U64::from(0u64);
+        let mut markets = HashSet::<Address>::new();
         for (event, meta) in logs {
-            println!("Metadata {:?}", meta);
+            print!("Fixed Lender {:?} - ", meta.address);
+            if meta.block_number > block {
+                if borrowers.len() > 0 {
+                    let previewer_borrowers = borrowers.iter().map(|(k, _)| k.clone()).collect();
+                    let previewer_borrowers = self
+                        .multicall_previewer(
+                            previewer_borrowers,
+                            Arc::clone(&self.previewer),
+                            Arc::clone(&self.multicall),
+                            block,
+                        )
+                        .await;
+                    Self::compare_positions(&previewer_borrowers, &borrowers);
+                }
+                block = meta.block_number;
+            }
             match event {
-                FixedLenderEvents::RoleGrantedFilter(_data) => {}
-                FixedLenderEvents::RoleAdminChangedFilter(_data) => {}
-                FixedLenderEvents::RoleRevokedFilter(_data) => {}
-                FixedLenderEvents::AccumulatedEarningsSmoothFactorUpdatedFilter(_data) => {}
-                FixedLenderEvents::MaxFuturePoolsUpdatedFilter(_data) => {}
-                FixedLenderEvents::SmartPoolEarningsAccruedFilter(_data) => {}
-                FixedLenderEvents::PausedFilter(_data) => {}
-                FixedLenderEvents::UnpausedFilter(_data) => {}
-                FixedLenderEvents::ApprovalFilter(_) => {}
+                // FixedLenderEvents::RoleGrantedFilter(_) => {}
+                // FixedLenderEvents::RoleAdminChangedFilter(_) => {}
+                // FixedLenderEvents::RoleRevokedFilter(_) => {}
+                // FixedLenderEvents::MaxFuturePoolsUpdatedFilter(_) => {}
+                // FixedLenderEvents::PausedFilter(_) => {}
+                // FixedLenderEvents::UnpausedFilter(_) => {}
+                // FixedLenderEvents::ApprovalFilter(_) => {}
+                // FixedLenderEvents::OracleUpdatedFilter(_) => {}
+                // FixedLenderEvents::LiquidationIncentiveUpdatedFilter(_) => {}
+                // FixedLenderEvents::BorrowCapUpdatedFilter(_) => {}
+                // FixedLenderEvents::InterestRateModelUpdatedFilter(_) => {}
+                // FixedLenderEvents::SmartPoolReserveFactorUpdatedFilter(_) => {}
+                // FixedLenderEvents::DampSpeedUpdatedFilter(_) => {}
+                FixedLenderEvents::SmartPoolEarningsAccruedFilter(data) => {
+                    println!("SmartPoolEarningsAccruedFilter\n{:?}\n", data);
+                }
+
+                FixedLenderEvents::AccumulatedEarningsSmoothFactorSetFilter(data) => {
+                    println!("AccumulatedEarningsSmoothFactorUpdatedFilter\n{:?}\n", data);
+                }
+
+                FixedLenderEvents::MarketListedFilter(data) => {
+                    println!("MarketListedFilter\n{:?}\n", data);
+                    markets.insert(data.fixed_lender);
+                }
 
                 FixedLenderEvents::TransferFilter(data) => {
+                    println!("Transfered\n{:?}\n", data);
                     if data.from != Address::zero() {}
                     if data.to != Address::zero() {}
+                    // TODO se ambos enderecos forem diferentes de zero não é mint nem bur, entao tem tratarr
                 }
                 FixedLenderEvents::DepositFilter(data) => {
-                    println!("Deposit {:?}", data);
-                    let borrower = if borrowers.contains_key(&data.owner) {
-                        borrowers.get_mut(&data.owner).unwrap()
-                    } else {
-                        let datas = Vec::<BorrowerData>::new();
-                        let borrower = Borrower::new_borrower_data(data.owner.clone(), datas);
-                        borrowers.insert(data.owner.clone(), borrower);
-                        borrowers.get_mut(&data.owner).unwrap()
-                    };
+                    println!("Deposit\n{:?}\n", data);
+                    let mut borrower = Self::create_borrower(&mut borrowers, &data.owner, &markets);
                     borrower.deposit(data, &meta.address);
                 }
                 FixedLenderEvents::WithdrawFilter(data) => {
-                    println!("Withdraw {:?}", data);
+                    println!("Withdraw\n{:?}\n", data);
                     if borrowers.contains_key(&data.owner) {
                         let borrower = borrowers.get_mut(&data.owner).unwrap();
                         borrower.withdraw(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::DepositAtMaturityFilter(data) => {
-                    println!("DepositAtMaturity {:?}", data);
-                    if borrowers.contains_key(&data.owner) {
-                        let borrower = borrowers.get_mut(&data.owner).unwrap();
-                        borrower.deposit_at_maturity(data, &meta.address);
-                    }
+                    println!("DepositAtMaturity\n{:?}\n", data);
+                    let borrower = Self::create_borrower(&mut borrowers, &data.owner, &markets);
+                    borrower.deposit_at_maturity(data, &meta.address);
                 }
                 FixedLenderEvents::WithdrawAtMaturityFilter(data) => {
-                    println!("WithdrawAtMaturity {:?}", data);
+                    println!("WithdrawAtMaturity\n{:?}\n", data);
                     if borrowers.contains_key(&data.owner) {
                         let borrower = borrowers.get_mut(&data.owner).unwrap();
                         borrower.withdraw_at_maturity(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::BorrowAtMaturityFilter(data) => {
-                    println!("BorrowAtMaturity {:?}", data);
+                    println!("BorrowAtMaturity\n{:?}\n", data);
                     if borrowers.contains_key(&data.borrower) {
                         let borrower = borrowers.get_mut(&data.borrower).unwrap();
                         borrower.borrow_at_maturity(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::RepayAtMaturityFilter(data) => {
-                    println!("RepayAtMaturity {:?}", data);
+                    println!("RepayAtMaturity\n{:?}\n", data);
                     if borrowers.contains_key(&data.borrower) {
                         let borrower = borrowers.get_mut(&data.borrower).unwrap();
                         borrower.repay_at_maturity(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::LiquidateBorrowFilter(data) => {
-                    println!("LiquidateBorrow {:?}", data);
+                    println!("LiquidateBorrow\n{:?}\n", data);
                     if borrowers.contains_key(&data.borrower) {
                         let borrower = borrowers.get_mut(&data.borrower).unwrap();
                         borrower.liquidate_borrow(data, &meta.address);
                     }
                 }
                 FixedLenderEvents::AssetSeizedFilter(data) => {
-                    println!("AssetSeized {:?}", data);
+                    println!("AssetSeized\n{:?}\n", data);
                     if borrowers.contains_key(&data.borrower) {
                         let borrower = borrowers.get_mut(&data.borrower).unwrap();
                         borrower.asset_seized(data, &meta.address);
                     }
+                }
+
+                FixedLenderEvents::AdjustFactorSetFilter(data) => {
+                    println!("AdjustFactorSetFilter\n{:?}\n", data);
+                }
+
+                FixedLenderEvents::PenaltyRateSetFilter(data) => {
+                    println!("PenaltyRateUpdatedFilter\n{:?}\n", data);
+                }
+
+                FixedLenderEvents::MarketEnteredFilter(data) => {
+                    println!("MarketEnteredFilter\n{:?}\n", data);
+                    if borrowers.contains_key(&data.account) {
+                        let borrower = borrowers.get_mut(&data.account).unwrap();
+                        borrower.set_collateral(&data.fixed_lender);
+                    }
+                }
+
+                FixedLenderEvents::MarketExitedFilter(data) => {
+                    println!("MarketExitedFilter\n{:?}\n", data);
+                    if borrowers.contains_key(&data.account) {
+                        let borrower = borrowers.get_mut(&data.account).unwrap();
+                        borrower.unset_collateral(&data.fixed_lender);
+                    }
+                }
+                _ => {
+                    println!("Event not handled - {:?}", event);
                 }
             }
         }
@@ -286,7 +347,10 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
     }
 
     // Updates information for new blocks
-    pub async fn update(&mut self) -> Result<(), LiquidationError> {
+    pub async fn update(
+        &mut self,
+        auditor: &Arc<AddressProvider<SignerMiddleware<M, S>>>,
+    ) -> Result<(), LiquidationError> {
         // Gets the last block
         let to = self
             .client
@@ -299,11 +363,13 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             return Ok(());
         }
 
-        let markets: Vec<Address> = self.fixed_lenders.keys().map(|k| k.clone()).collect();
+        let mut contracts_with_events: Vec<Address> =
+            self.fixed_lenders.keys().map(|k| k.clone()).collect();
+        contracts_with_events.push(auditor.address());
         let f = Filter::new()
             .from_block(self.last_block_synced + U64::from(1u64))
             .to_block(&to)
-            .address(markets);
+            .address(contracts_with_events);
         let logs = self
             .client
             .provider()
@@ -311,10 +377,10 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             .await
             .map_err(|e| LiquidationError::NetError("Error getting logs".to_string()))?;
         println!(
-            "Updating info from {} to {}\n{:?}",
+            "Updating info from {} to {}",
             &(self.last_block_synced + U64::from(1u64)),
             &to,
-            &logs
+            // &logs
         );
 
         let logs = logs
@@ -332,8 +398,17 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
             })
             .collect();
 
-        let mut borrowers = Self::parse_events(logs);
-
+        let mut borrowers = self.parse_events(logs).await;
+        let previewer_borrowers = borrowers.iter().map(|(k, _)| k.clone()).collect();
+        let previewer_borrowers = self
+            .multicall_previewer(
+                previewer_borrowers,
+                Arc::clone(&self.previewer),
+                Arc::clone(&self.multicall),
+                U64::from(&to),
+            )
+            .await;
+        Self::compare_positions(&previewer_borrowers, &borrowers);
         // Load fresh prices from oracle
         // self.price_oracle.update_prices().await?;
 
@@ -358,12 +433,13 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         //     .await;
         let mut liquidations: HashMap<Address, Borrower> = HashMap::new();
         for (address, borrower) in borrowers.iter_mut() {
-            let hf = borrower.compute_hf();
-            if let Ok(hf) = hf {
-                if hf < U256::exp10(18) && borrower.debt() != U256::zero() {
-                    liquidations.insert(address.clone(), borrower.clone());
-                }
-            }
+            println!("borrower {:?}", borrower);
+            // let hf = borrower.compute_hf();
+            // if let Ok(hf) = hf {
+            //     if hf < U256::exp10(18) && borrower.debt() != U256::zero() {
+            //         liquidations.insert(address.clone(), borrower.clone());
+            //     }
+            // }
         }
         self.liquidate(&liquidations).await;
 
@@ -452,14 +528,15 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
         let batch = 1000;
         let mut liquidations = HashMap::<Address, Borrower>::new();
         while skip < candidates.len() {
-            let mut calls: Vec<(Address, Vec<u8>)> = Vec::new();
+            let mut calls: Vec<(Address, Address)> = Vec::new();
 
             let mut updated_waiting_data: Vec<Address> = Vec::new();
             for borrower in candidates.clone().iter().skip(skip).take(batch) {
                 println!("Creating multicall for borrower {}", borrower);
                 updated_waiting_data.push(borrower.clone());
-                let tokens = vec![Token::Address(borrower.clone())];
-                let brw: Vec<u8> = (*function.encode_input(&tokens).unwrap()).to_owned();
+                // let tokens = vec![Token::Address(borrower.clone())];
+                // let brw: Vec<u8> = (*function.encode_input(&tokens).unwrap()).to_owned();
+                let brw = borrower.clone();
                 calls.push((self.previewer.address(), brw));
                 // self.previewer
                 //     .accounts(borrower.clone())
@@ -489,15 +566,16 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                 let payload: Vec<(
                     Address,
                     String,
-                    Vec<(U256, (U256, U256))>,
-                    Vec<(U256, (U256, U256))>,
-                    U256,
-                    U256,
                     U256,
                     U128,
                     U128,
                     u8,
+                    u8,
                     bool,
+                    U256,
+                    U256,
+                    Vec<(U256, (U256, U256))>,
+                    Vec<(U256, (U256, U256))>,
                 )> = decode_function_data(function, r, false).unwrap();
 
                 // println!("payload[{}]: {:?}", payload.len(), &payload);
@@ -541,5 +619,234 @@ impl<M: Middleware, S: Signer> CreditService<M, S> {
                 println!("Liquidation tx {:?}", receipt);
             }
         }
+    }
+
+    async fn multicall_previewer(
+        &self,
+        borrowers: HashSet<Address>,
+        previewer: Arc<Previewer<SignerMiddleware<M, S>>>,
+        multicall: Arc<Multicall2<SignerMiddleware<M, S>>>,
+        block: U64,
+    ) -> HashMap<Address, Borrower> {
+        let function = &previewer.abi().functions.get("accounts").unwrap()[0];
+        let mut skip: usize = 0;
+        let batch = 1000;
+        let mut positions = HashMap::<Address, Borrower>::new();
+        while skip < borrowers.len() {
+            // let mut calls: Vec<(Address, Address)> = Vec::new();
+            let mut calls = Vec::new();
+
+            let mut updated_waiting_data: Vec<Address> = Vec::new();
+            let mut responses: Vec<PreviewerData> = Vec::new();
+            for borrower in borrowers.iter().skip(skip).take(batch) {
+                updated_waiting_data.push(borrower.clone());
+                // let tokens = vec![Token::Address(borrower.clone())];
+                // let brw: Vec<u8> = (*function.encode_input(&tokens).unwrap()).to_owned();
+                // let brw = Token::Address(borrower.clone());
+                let brw = borrower.clone();
+                // calls.push((previewer.address(), brw));
+
+                let method = previewer.accounts(borrower.clone());
+                let method = method.block(block);
+                responses.push(method.call().await.unwrap());
+                calls.push(method);
+                // println!("Previewer{:?}", a);
+            }
+
+            println!("multicall");
+
+            // let mut multicall = Multicall::new(self.client.clone(), None).await.unwrap();
+            // for call in calls {
+            //     multicall.add_call(call);
+            // }
+            // let responses = multicall.call::<Vec<PreviewerData>>().await.unwrap();
+
+            // let response = multicall
+            //     .aggregate(calls)
+            //     // .block(block)
+            //     .call()
+            //     .await
+            //     .unwrap();
+
+            println!("Response: {:?}", responses);
+
+            // let responses = response.1;
+
+            let mut updateds = updated_waiting_data.iter();
+            for payload in responses {
+                println!("Iterates over responses");
+                // let payload: Vec<PreviewerData> = decode_function_data(function, r, false).unwrap();
+
+                println!("payload[{}]: {:?}", payload.len(), &payload);
+
+                // let _health_factor = 0; // payload.7.as_u64();
+                let borrower = updateds
+                    .next()
+                    .expect("Number of borrowers and responses doesn't match");
+
+                let borrower_account = Borrower::new(borrower.clone(), payload);
+
+                if positions.contains_key(&borrower) {
+                    *positions.get_mut(borrower).unwrap() = borrower_account;
+                } else {
+                    positions.insert(borrower.clone(), borrower_account);
+                }
+            }
+
+            skip += batch;
+            println!("Accounts done: {} ", &skip);
+        }
+        positions
+    }
+
+    fn compare_positions(
+        previewer: &HashMap<Address, Borrower>,
+        events: &HashMap<Address, Borrower>,
+    ) {
+        println!("Comparing positions");
+        println!("-------------------");
+        for (_, previewer_borrower) in previewer {
+            if let Some(event_borrower) = events.get(&previewer_borrower.borrower()) {
+                println!("Borrower: {:?}", &previewer_borrower.borrower());
+                println!("---");
+                if previewer_borrower.data().len() != event_borrower.data().len() {
+                    println!(
+                        "Number of fixed lenders doesn't match. Previewer: {:?}, Event: {:?}",
+                        previewer_borrower.data().len(),
+                        event_borrower.data().len()
+                    );
+                } else if previewer_borrower.data().len() == 0 {
+                    println!("No fixed lenders.");
+                } else {
+                    for (_, data) in previewer_borrower.data().iter() {
+                        if let Some(fixed_lender) = event_borrower.data().get(&data.fixed_lender())
+                        {
+                            println!("Fixed lender: {:?}", &fixed_lender.fixed_lender());
+                            let mut fixed_lender_correct = true;
+                            if &data.smart_pool_assets() != &fixed_lender.smart_pool_assets() {
+                                fixed_lender_correct = false;
+                                println!("  smart_pool_assets:");
+                                println!("    Previewer: {:?}", &data.smart_pool_assets());
+                                println!("    Event    : {:?}", &fixed_lender.smart_pool_assets());
+                            }
+                            if &data.smart_pool_shares() != &fixed_lender.smart_pool_shares() {
+                                fixed_lender_correct = false;
+                                println!("  smart_pool_shares:");
+                                println!("    Previewer: {:?}", &data.smart_pool_shares());
+                                println!("    Event    : {:?}", &fixed_lender.smart_pool_shares());
+                            }
+                            if &data.oracle_price() != &fixed_lender.oracle_price() {
+                                fixed_lender_correct = false;
+                                println!("  oracle_price:");
+                                println!("    Previewer: {:?}", &data.oracle_price());
+                                println!("    Event    : {:?}", &fixed_lender.oracle_price());
+                            }
+                            if &data.penalty_rate() != &fixed_lender.penalty_rate() {
+                                fixed_lender_correct = false;
+                                println!("  penalty_rate:");
+                                println!("    Previewer: {:?}", &data.penalty_rate());
+                                println!("    Event    : {:?}", &fixed_lender.penalty_rate());
+                            }
+                            if &data.adjust_factor() != &fixed_lender.adjust_factor() {
+                                fixed_lender_correct = false;
+                                println!("  adjust_factor:");
+                                println!("    Previewer: {:?}", &data.adjust_factor());
+                                println!("    Event    : {:?}", &fixed_lender.adjust_factor());
+                            }
+                            if &data.decimals() != &fixed_lender.decimals() {
+                                fixed_lender_correct = false;
+                                println!("  decimals:");
+                                println!("    Previewer: {:?}", &data.decimals());
+                                println!("    Event    : {:?}", &fixed_lender.decimals());
+                            }
+                            if &data.is_collateral() != &fixed_lender.is_collateral() {
+                                fixed_lender_correct = false;
+                                println!("  is_collateral:");
+                                println!("    Previewer: {:?}", &data.is_collateral());
+                                println!("    Event    : {:?}", &fixed_lender.is_collateral());
+                            }
+
+                            println!("  supplies:");
+                            let mut supplies_correct = true;
+                            for (maturity, total) in data.maturity_supply_positions() {
+                                if let Some(supply) = fixed_lender.supply_at_maturity(&maturity) {
+                                    if total != supply {
+                                        supplies_correct = false;
+                                        println!("    Previewer: {:?}", &total);
+                                        println!("    Event    : {:?}", &supply);
+                                    }
+                                } else {
+                                    supplies_correct = false;
+                                    println!("    Maturity {:?} not found on event", maturity);
+                                }
+                            }
+                            for (maturity, total) in fixed_lender.maturity_supply_positions() {
+                                if data.supply_at_maturity(&maturity) == None {
+                                    supplies_correct = false;
+                                    println!("    Maturity {:?} not found on previewer", maturity);
+                                }
+                            }
+                            if supplies_correct {
+                                println!("    Supplies are correct.");
+                            }
+
+                            println!("  borrows:");
+                            let mut borrows_correct = true;
+                            for (maturity, total) in data.maturity_borrow_positions() {
+                                if let Some(borrow) = fixed_lender.borrow_at_maturity(&maturity) {
+                                    if total != borrow {
+                                        borrows_correct = false;
+                                        println!("    Previewer: {:?}", &total);
+                                        println!("    Event    : {:?}", &borrow);
+                                    }
+                                } else {
+                                    borrows_correct = false;
+                                    println!("    Maturity {:?} not found on event", maturity);
+                                }
+                            }
+                            for (maturity, total) in fixed_lender.maturity_borrow_positions() {
+                                if data.borrow_at_maturity(&maturity) == None {
+                                    borrows_correct = false;
+                                    println!("    Maturity {:?} not found on previewer", maturity);
+                                }
+                            }
+                            if borrows_correct {
+                                println!("    Borrows are correct.");
+                            }
+                        } else {
+                            println!(
+                                "Fixed lender {:?} doesn't found in data generated by events.",
+                                &data.fixed_lender()
+                            );
+                        }
+                    }
+                }
+                println!("-------------------\n");
+            } else {
+                println!(
+                    "Borrower {:?} not found in events",
+                    previewer_borrower.borrower()
+                );
+            }
+        }
+    }
+
+    fn create_borrower<'a>(
+        borrowers: &'a mut HashMap<H160, Borrower>,
+        borrower_address: &Address,
+        markets: &HashSet<H160>,
+    ) -> &'a mut Borrower {
+        let borrower = if borrowers.contains_key(&borrower_address) {
+            println!("Creating borrower\n{:?}\n", &borrower_address);
+            borrowers.get_mut(borrower_address).unwrap()
+        } else {
+            println!("Creating borrower\n{:?}\n", borrower_address);
+            let borrower_data = Vec::<BorrowerData>::new();
+            let mut borrower = Borrower::new_borrower_data(borrower_address.clone(), borrower_data);
+            borrower.add_markets(markets);
+            borrowers.insert(borrower_address.clone(), borrower);
+            borrowers.get_mut(borrower_address).unwrap()
+        };
+        borrower
     }
 }

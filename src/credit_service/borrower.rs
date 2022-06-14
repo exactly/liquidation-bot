@@ -8,7 +8,7 @@ use crate::{
     errors::LiquidationError,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{Debug, Formatter},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -23,7 +23,7 @@ pub struct BorrowerData {
     smart_pool_shares: U256,
     oracle_price: U256,
     penalty_rate: U128,
-    collateral_factor: U128,
+    adjust_factor: U128,
     decimals: u8,
     is_collateral: bool,
 }
@@ -34,32 +34,47 @@ impl PartialEq for BorrowerData {
     }
 }
 
+// FixedLender market;
+// string assetSymbol;
+// uint256 oraclePrice;
+// uint128 penaltyRate;
+// uint128 adjustFactor;
+// uint8 decimals;
+// uint8 maxFuturePools;
+// bool isCollateral;
+// uint256 smartPoolShares;
+// uint256 smartPoolAssets;
+// MaturityPosition[] maturitySupplyPositions;
+// MaturityPosition[] maturityBorrowPositions;
+
 impl BorrowerData {
     pub fn new(
         (
             fixed_lender,
             asset_symbol,
-            maturity_supply,
-            maturity_borrow,
-            smart_pool_assets,
-            smart_pool_shares,
             oracle_price,
             penalty_rate,
-            collateral_factor,
+            adjust_factor,
             decimals,
+            max_future_pools,
             is_collateral,
+            smart_pool_shares,
+            smart_pool_assets,
+            maturity_supply,
+            maturity_borrow,
         ): (
             Address,
             String,
-            Vec<(U256, (U256, U256))>,
-            Vec<(U256, (U256, U256))>,
-            U256,
-            U256,
             U256,
             U128,
             U128,
             u8,
+            u8,
             bool,
+            U256,
+            U256,
+            Vec<(U256, (U256, U256))>,
+            Vec<(U256, (U256, U256))>,
         ),
     ) -> Self {
         let mut maturity_supply_positions = HashMap::new();
@@ -79,10 +94,58 @@ impl BorrowerData {
             smart_pool_shares,
             oracle_price,
             penalty_rate,
-            collateral_factor,
+            adjust_factor,
             decimals,
             is_collateral,
         }
+    }
+
+    pub fn fixed_lender(&self) -> H160 {
+        self.fixed_lender
+    }
+
+    pub fn maturity_supply_positions(&self) -> &HashMap<U256, U256> {
+        &self.maturity_supply_positions
+    }
+
+    pub fn supply_at_maturity(&self, maturity: &U256) -> Option<&U256> {
+        self.maturity_supply_positions.get(&maturity)
+    }
+
+    pub fn maturity_borrow_positions(&self) -> &HashMap<U256, U256> {
+        &self.maturity_borrow_positions
+    }
+
+    pub fn borrow_at_maturity(&self, maturity: &U256) -> Option<&U256> {
+        self.maturity_borrow_positions.get(&maturity)
+    }
+
+    pub fn smart_pool_assets(&self) -> U256 {
+        self.smart_pool_assets
+    }
+
+    pub fn smart_pool_shares(&self) -> U256 {
+        self.smart_pool_shares
+    }
+
+    pub fn oracle_price(&self) -> U256 {
+        self.oracle_price
+    }
+
+    pub fn penalty_rate(&self) -> U128 {
+        self.penalty_rate
+    }
+
+    pub fn decimals(&self) -> u8 {
+        self.decimals
+    }
+
+    pub fn is_collateral(&self) -> bool {
+        self.is_collateral
+    }
+
+    pub fn adjust_factor(&self) -> U128 {
+        self.adjust_factor
     }
 }
 
@@ -106,17 +169,19 @@ impl Debug for Borrower {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "==============
+            "\n==============
 \tBorrower               {:?}
 \tTotal Collateral       {:?}
 \tTotal Debt             {:?}
 \tSeizable Collateral    {:?}
-\tDebt on Fixed Lender   {:?}",
+\tDebt on Fixed Lender   {:?}
+\tData\n{:?}\n",
             self.borrower,
             self.collateral,
             self.debt,
             self.seizable_collateral,
             self.fixed_lender_to_liquidate,
+            self.data
         )
 
         // write!(
@@ -147,15 +212,16 @@ impl Borrower {
         account_data: Vec<(
             Address,
             String,
-            Vec<(U256, (U256, U256))>,
-            Vec<(U256, (U256, U256))>,
-            U256,
-            U256,
             U256,
             U128,
             U128,
             u8,
+            u8,
             bool,
+            U256,
+            U256,
+            Vec<(U256, (U256, U256))>,
+            Vec<(U256, (U256, U256))>,
         )>,
     ) -> Self {
         let mut data = HashMap::<Address, BorrowerData>::new();
@@ -181,7 +247,7 @@ impl Borrower {
             if data.is_collateral {
                 let current_collateral = (data.smart_pool_assets * data.oracle_price
                     / U256::exp10(usize::from(data.decimals)))
-                    * U256::from(data.collateral_factor)
+                    * U256::from(data.adjust_factor)
                     / U256::exp10(18);
                 if current_collateral > seizable_collateral.0 {
                     seizable_collateral = (current_collateral, Some(data.fixed_lender));
@@ -266,24 +332,28 @@ impl Borrower {
 
     pub fn deposit(&mut self, deposit: DepositFilter, fixed_lender: &Address) {
         if self.data.contains_key(fixed_lender) {
+            println!("Updating fixed lender");
             let data = self.data.get_mut(fixed_lender).unwrap();
             data.smart_pool_assets += deposit.assets;
             data.smart_pool_shares += deposit.shares;
         } else {
+            println!("Adding fixed lender");
             let data = BorrowerData::new((
                 fixed_lender.clone(),
                 String::new(),
-                Vec::new(),
-                Vec::new(),
-                deposit.assets,
-                deposit.shares,
                 U256::zero(),
                 U128::zero(),
                 U128::zero(),
                 0u8,
+                0u8,
                 false,
+                deposit.shares,
+                deposit.assets,
+                Vec::new(),
+                Vec::new(),
             ));
             self.data.insert(*fixed_lender, data);
+            println!("Fixed lender count: {:?}", self.data.len());
         }
     }
 
@@ -340,21 +410,38 @@ impl Borrower {
     }
 
     pub fn borrow_at_maturity(&mut self, borrow: BorrowAtMaturityFilter, fixed_lender: &Address) {
-        if self.data.contains_key(fixed_lender) {
-            let mut data = self.data.get_mut(fixed_lender).unwrap();
-            if data
+        let mut data = if self.data.contains_key(fixed_lender) {
+            self.data.get_mut(fixed_lender).unwrap()
+        } else {
+            let data = BorrowerData::new((
+                fixed_lender.clone(),
+                String::new(),
+                U256::zero(),
+                U128::zero(),
+                U128::zero(),
+                0u8,
+                0u8,
+                false,
+                U256::zero(),
+                U256::zero(),
+                Vec::new(),
+                Vec::new(),
+            ));
+            self.data.insert(*fixed_lender, data);
+            self.data.get_mut(fixed_lender).unwrap()
+        };
+        if data
+            .maturity_borrow_positions
+            .contains_key(&borrow.maturity)
+        {
+            let borrowed = data
                 .maturity_borrow_positions
-                .contains_key(&borrow.maturity)
-            {
-                let borrowed = data
-                    .maturity_borrow_positions
-                    .get_mut(&borrow.maturity)
-                    .unwrap();
-                *borrowed += borrow.assets + borrow.fee;
-            } else {
-                data.maturity_borrow_positions
-                    .insert(borrow.maturity, borrow.assets + borrow.fee);
-            }
+                .get_mut(&borrow.maturity)
+                .unwrap();
+            *borrowed += borrow.assets + borrow.fee;
+        } else {
+            data.maturity_borrow_positions
+                .insert(borrow.maturity, borrow.assets + borrow.fee);
         }
     }
 
@@ -378,5 +465,46 @@ impl Borrower {
 
     pub fn asset_seized(&mut self, seize: AssetSeizedFilter, fixed_lender: &Address) {
         // it needs no action since the events emited by the repay_at_maturity are enough to seixe the borrow's assets
+    }
+
+    pub fn set_collateral(&mut self, fixed_lender: &Address) {
+        if self.data.contains_key(fixed_lender) {
+            println!("Setting as collateral");
+            let mut data = self.data.get_mut(fixed_lender).unwrap();
+            data.is_collateral = true;
+        }
+    }
+
+    pub fn unset_collateral(&mut self, fixed_lender: &Address) {
+        if self.data.contains_key(fixed_lender) {
+            let mut data = self.data.get_mut(fixed_lender).unwrap();
+            data.is_collateral = false;
+        }
+    }
+
+    pub fn data(&self) -> &HashMap<Address, BorrowerData> {
+        &self.data
+    }
+
+    pub fn add_markets(&mut self, markets: &HashSet<Address>) {
+        for market in markets {
+            if !self.data.contains_key(market) {
+                let data = BorrowerData::new((
+                    market.clone(),
+                    String::new(),
+                    U256::zero(),
+                    U128::zero(),
+                    U128::zero(),
+                    0u8,
+                    0u8,
+                    false,
+                    U256::zero(),
+                    U256::zero(),
+                    Vec::new(),
+                    Vec::new(),
+                ));
+                self.data.insert(market.clone(), data);
+            }
+        }
     }
 }
