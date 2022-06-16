@@ -25,7 +25,7 @@ impl<M> std::ops::Deref for ExactlyOracle<M> {
 
 impl<M: Middleware> ExactlyOracle<M> {
     fn parse_abi(abi_path: &str) -> (Address, Abi) {
-        //"node_modules/@exactly-finance/protocol/deployments/kovan/FixedLenderDAI.json"
+        //"lib/protocol/deployments/kovan/FixedLenderDAI.json"
         let file = File::open(abi_path).unwrap();
         let reader = BufReader::new(file);
         let contract: Value = serde_json::from_reader(reader).unwrap();

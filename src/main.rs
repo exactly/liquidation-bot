@@ -29,7 +29,7 @@ mod token_service;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("Gearbox liquidation bot started!");
+    println!("exactly liquidation bot started!");
 
     let config = Config::default();
     println!("Address provider: {:?} ", &config.address_provider);
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
 
     let client = Arc::new(client);
 
-    // let file = File::open("node_modules/@exactly-finance/protocol/deployments/kovan/Auditor.json")?;
+    // let file = File::open("lib/protocol/deployments/kovan/Auditor.json")?;
     // let reader = BufReader::new(file);
     // // let auditor = ethers::abi::Contract::load(reader).unwrap();
     // let auditor: Value = serde_json::from_reader(reader)?;
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
 
     let previewer = Previewer::new(
         &format!(
-            "node_modules/@exactly-finance/protocol/deployments/{}/Previewer.json",
+            "lib/protocol/deployments/{}/Previewer.json",
             config.chain_id_name
         ),
         None,

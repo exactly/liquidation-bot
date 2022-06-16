@@ -26,7 +26,7 @@ mod addressprovider_mod {
     pub static ADDRESSPROVIDER_ABI: ethers_contract::Lazy<ethers_core::abi::Abi> =
         ethers_contract::Lazy::new(|| {
             let file = File::open(format!(
-                "node_modules/@exactly-finance/protocol/deployments/{}/Auditor.json",
+                "lib/protocol/deployments/{}/Auditor.json",
                 "rinkeby"
             ))
             .unwrap();
@@ -89,7 +89,7 @@ mod addressprovider_mod {
         #[doc = r" object"]
         pub fn new(config: Config, client: ::std::sync::Arc<M>) -> Self {
             let file = File::open(format!(
-                "node_modules/@exactly-finance/protocol/deployments/{}/Auditor.json",
+                "lib/protocol/deployments/{}/Auditor.json",
                 config.chain_id_name
             ))
             .unwrap();

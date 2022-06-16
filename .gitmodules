@@ -1,0 +1,4 @@
+[submodule "lib/protocol"]
+	path = lib/protocol
+	url = git@github.com:exactly-finance/protocol.git
+	branch = deploy

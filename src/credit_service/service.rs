@@ -31,7 +31,7 @@ use super::BorrowerData;
 abigen!(
     ExactlyOracle,
     // TODO make it works on kovan as well
-    "node_modules/@exactly-finance/protocol/deployments/rinkeby/ExactlyOracle.json",
+    "lib/protocol/deployments/rinkeby/ExactlyOracle.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
