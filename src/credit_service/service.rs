@@ -5,15 +5,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{thread, time};
 
-use anyhow::{Error, Result};
-use ethers::abi::{Abi, RawLog};
-use ethers::core::types::Filter;
-use ethers::core::types::{Address, U256, U64};
-use ethers::prelude::k256::ecdsa::SigningKey;
 use ethers::prelude::{
-    ContractError, EthLogDecode, Http, LogMeta, Middleware, Multicall, Provider, SignerMiddleware,
-    StreamExt, Wallet,
+    abi::{Abi, RawLog},
+    types::Filter,
+    Address, ContractError, EthLogDecode, LogMeta, Middleware, Multicall, Signer, SignerMiddleware,
+    StreamExt, U256, U64,
 };
+use eyre::Result;
 use serde_json::Value;
 
 use crate::bindings::ExactlyEvents;
@@ -37,58 +35,50 @@ struct ContractKey {
     kind: ContractKeyKind,
 }
 
-pub struct CreditService {
-    previewer: Previewer<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
-    client: Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
+pub struct CreditService<M, S> {
+    client: Arc<SignerMiddleware<M, S>>,
     last_sync: (U64, i128, i128),
-    auditor: Auditor<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
-    provider: Provider<Http>,
-    oracle: ExactlyOracle<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
-    markets: HashMap<Address, FixedLender>,
+    previewer: Previewer<SignerMiddleware<M, S>>,
+    auditor: Auditor<SignerMiddleware<M, S>>,
+    oracle: ExactlyOracle<SignerMiddleware<M, S>>,
+    markets: HashMap<Address, FixedLender<M, S>>,
     sp_fee_rate: U256,
     borrowers: HashMap<Address, Account>,
     contracts_to_listen: HashMap<ContractKey, Address>,
 }
 
-impl CreditService {
-    pub fn new(
-        client: Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
-        provider: Provider<Http>,
-        config: Config,
-    ) -> CreditService {
-        let (auditor_address, _, block_number) = CreditService::parse_abi(&format!(
+impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
+    pub fn new(client: Arc<SignerMiddleware<M, S>>, config: Config) -> CreditService<M, S> {
+        let (auditor_address, _, block_number) = CreditService::<M, S>::parse_abi(&format!(
             "lib/protocol/deployments/{}/Auditor.json",
             config.chain_id_name
         ));
-        let auditor = Auditor::new(auditor_address, Arc::clone(&client));
 
-        let (previewer_address, _, _) = CreditService::parse_abi(&format!(
+        let (previewer_address, _, _) = CreditService::<M, S>::parse_abi(&format!(
             "lib/protocol/deployments/{}/Previewer.json",
             config.chain_id_name
         ));
-        let previewer = Previewer::new(previewer_address, Arc::clone(&client));
 
         CreditService {
-            previewer,
             client: Arc::clone(&client),
             last_sync: (U64::from(block_number - 1), -1, -1),
-            auditor,
-            provider,
+            auditor: Auditor::new(auditor_address, Arc::clone(&client)),
+            previewer: Previewer::new(previewer_address, Arc::clone(&client)),
             oracle: ExactlyOracle::new(Address::zero(), Arc::clone(&client)),
-            markets: HashMap::<Address, FixedLender>::new(),
+            markets: HashMap::<Address, FixedLender<M, S>>::new(),
             sp_fee_rate: U256::zero(),
             borrowers: HashMap::new(),
             contracts_to_listen: HashMap::new(),
         }
     }
 
-    pub async fn launch(&mut self) -> Result<(), Error> {
+    pub async fn launch(&mut self) -> Result<()> {
         let markets = self.auditor.get_all_markets().call().await?;
         for market in markets {
             println!("Adding market {:?}", market);
             self.markets
                 .entry(market)
-                .or_insert_with_key(|key| FixedLender::new(*key));
+                .or_insert_with_key(|key| FixedLender::new(*key, &self.client));
         }
 
         self.markets.keys().for_each(|address| {
@@ -122,11 +112,7 @@ impl CreditService {
         let mut on_block = watcher
             .watch_blocks()
             .await
-            .map_err(
-                ContractError::MiddlewareError::<
-                    SignerMiddleware<Provider<Http>, Wallet<SigningKey>>,
-                >,
-            )
+            .map_err(ContractError::MiddlewareError::<SignerMiddleware<M, S>>)
             .unwrap()
             .stream();
         while on_block.next().await.is_some() {
@@ -146,11 +132,8 @@ impl CreditService {
 
     async fn update_prices(&mut self, block: U64) -> Result<()> {
         println!("\nUpdating prices for block {}:\n", block);
-        let mut multicall = Multicall::<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>::new(
-            Arc::clone(&self.client),
-            None,
-        )
-        .await?;
+        let mut multicall =
+            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
         let mut update = false;
         for (market, _) in self.markets.iter().filter(|(_, v)| v.listed) {
             update = true;
@@ -175,7 +158,7 @@ impl CreditService {
         &mut self,
         logs: Vec<(ExactlyEvents, LogMeta)>,
         from: (U64, i128, i128),
-    ) -> Result<(U64, i128, i128), Error> {
+    ) -> Result<(U64, i128, i128)> {
         let mut block = from.0;
         let mut block_timestamp = U256::zero();
         for (event, meta) in logs {
@@ -206,7 +189,8 @@ impl CreditService {
                 }
                 block = meta.block_number;
                 block_timestamp = self
-                    .provider
+                    .client
+                    .provider()
                     .get_block(meta.block_number)
                     .await
                     .unwrap()
@@ -218,7 +202,7 @@ impl CreditService {
                 ExactlyEvents::MaxFuturePoolsSetFilter(data) => {
                     self.markets
                         .entry(meta.address)
-                        .or_insert_with_key(|key| FixedLender::new(*key))
+                        .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
                         .max_future_pools = data.new_max_future_pools.as_u32() as u8;
                 }
 
@@ -241,7 +225,7 @@ impl CreditService {
                 ExactlyEvents::AccumulatedEarningsSmoothFactorSetFilter(data) => {
                     self.markets
                         .entry(meta.address)
-                        .or_insert_with_key(|key| FixedLender::new(*key))
+                        .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
                         .accumulated_earnings_smooth_factor =
                         data.new_accumulated_earnings_smooth_factor;
                 }
@@ -250,7 +234,7 @@ impl CreditService {
                     let mut market = self
                         .markets
                         .entry(data.fixed_lender)
-                        .or_insert_with_key(|key| FixedLender::new(*key));
+                        .or_insert_with_key(|key| FixedLender::new(*key, &self.client));
 
                     market.decimals = data.decimals;
                     market.smart_pool_fee_rate = self.sp_fee_rate;
@@ -319,14 +303,14 @@ impl CreditService {
                 ExactlyEvents::AdjustFactorSetFilter(data) => {
                     self.markets
                         .entry(data.fixed_lender)
-                        .or_insert_with_key(|key| FixedLender::new(*key))
+                        .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
                         .adjust_factor = data.new_adjust_factor;
                 }
 
                 ExactlyEvents::PenaltyRateSetFilter(data) => {
                     self.markets
                         .entry(meta.address)
-                        .or_insert_with_key(|key| FixedLender::new(*key))
+                        .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
                         .penalty_rate = data.new_penalty_rate;
                 }
 
@@ -360,7 +344,7 @@ impl CreditService {
                         .or_insert_with(|| data.source);
                     self.markets
                         .entry(data.fixed_lender)
-                        .or_insert_with_key(|key| FixedLender::new(*key))
+                        .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
                         .price_feed = data.source;
                     self.update_prices(meta.block_number).await?;
                 }
@@ -378,7 +362,7 @@ impl CreditService {
                         .unwrap();
                     self.markets
                         .entry(market)
-                        .or_insert_with_key(|key| FixedLender::new(*key))
+                        .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
                         .oracle_price = data.current.into_raw() * U256::exp10(10);
                 }
 
@@ -386,7 +370,7 @@ impl CreditService {
                     let market = self
                         .markets
                         .entry(meta.address)
-                        .or_insert_with_key(|address| FixedLender::new(*address));
+                        .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
                     market.total_shares = data.smart_pool_shares;
                     market.smart_pool_assets = data.smart_pool_assets;
                     market.smart_pool_earnings_accumulator = data.smart_pool_earnings_accumulator;
@@ -452,12 +436,18 @@ impl CreditService {
 
         self.last_sync = self.handle_events(events, self.last_sync).await?;
         if let (_, -1, -1) = self.last_sync {
-            self.last_sync.0 = to + 1
+            self.last_sync.0 = to + 1u64
         } else {
             return Ok(());
         }
         // let previewer_borrowers = self.multicall_previewer(U64::from(&to)).await;
-        let to_timestamp = self.provider.get_block(to).await?.unwrap().timestamp;
+        let to_timestamp = self
+            .client
+            .provider()
+            .get_block(to)
+            .await?
+            .unwrap()
+            .timestamp;
         if (*self.oracle).address() != Address::zero() {
             self.update_prices(to).await?;
         }
@@ -485,10 +475,8 @@ impl CreditService {
             if let Some(address) = &borrower.fixed_lender_to_liquidate() {
                 println!("Liquidating on fixed lender {:?}", address);
 
-                let contract = Market::<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>::new(
-                    *address,
-                    Arc::clone(&self.client),
-                );
+                let contract =
+                    Market::<SignerMiddleware<M, S>>::new(*address, Arc::clone(&&self.client));
 
                 let func = contract
                     .liquidate(
@@ -799,10 +787,10 @@ total_assets = {:?}",
     }
 
     pub fn compute_hf(
-        markets: &mut HashMap<Address, FixedLender>,
+        markets: &mut HashMap<Address, FixedLender<M, S>>,
         account: &mut Account,
         timestamp: U256,
-    ) -> Result<U256, Error> {
+    ) -> Result<U256> {
         let mut collateral: U256 = U256::zero();
         let mut debt: U256 = U256::zero();
         let mut seizable_collateral: (U256, Option<Address>) = (U256::zero(), None);

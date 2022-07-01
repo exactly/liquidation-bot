@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ethers::abi::Address;
-use ethers::prelude::U256;
+use ethers::prelude::{Middleware, Signer, SignerMiddleware, U256};
+
+use super::Market;
 
 const INTERVAL: u64 = 4 * 7 * 86_400;
 
@@ -13,10 +16,8 @@ pub struct FixedPool {
     pub last_accrual: U256,
 }
 
-#[derive(Eq, Default)]
-pub struct FixedLender {
-    pub address: Address,
-    // pub contract: Option<Market<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>>,
+pub struct FixedLender<M, S> {
+    pub contract: Market<SignerMiddleware<M, S>>,
     pub oracle_price: U256,
     pub penalty_rate: U256,
     pub adjust_factor: U256,
@@ -33,18 +34,32 @@ pub struct FixedLender {
     pub listed: bool,
 }
 
-impl PartialEq for FixedLender {
+impl<M: Middleware, S: Signer> Eq for FixedLender<M, S> {}
+
+impl<M: Middleware, S: Signer> PartialEq for FixedLender<M, S> {
     fn eq(&self, other: &Self) -> bool {
-        self.address == other.address
+        (*self.contract).address() == (*other.contract).address()
     }
 }
 
-impl FixedLender {
-    pub fn new(address: Address) -> Self {
-        println!("=========== ASDF {:?}", address);
+impl<M: Middleware, S: Signer> FixedLender<M, S> {
+    pub fn new(address: Address, client: &Arc<SignerMiddleware<M, S>>) -> Self {
         Self {
-            address,
-            ..Default::default()
+            contract: Market::new(address, Arc::clone(client)),
+            oracle_price: Default::default(),
+            penalty_rate: Default::default(),
+            adjust_factor: Default::default(),
+            decimals: Default::default(),
+            smart_pool_assets: Default::default(),
+            total_shares: Default::default(),
+            max_future_pools: Default::default(),
+            fixed_pools: Default::default(),
+            smart_pool_fee_rate: Default::default(),
+            smart_pool_earnings_accumulator: Default::default(),
+            last_accumulated_earnings_accrual: Default::default(),
+            accumulated_earnings_smooth_factor: Default::default(),
+            price_feed: Default::default(),
+            listed: Default::default(),
         }
     }
 

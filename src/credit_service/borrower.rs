@@ -38,7 +38,11 @@ impl AccountPosition {
         Default::default()
     }
 
-    pub fn smart_pool_assets(&self, market: &FixedLender, timestamp: U256) -> U256 {
+    pub fn smart_pool_assets<M: Middleware, S: Signer>(
+        &self,
+        market: &FixedLender<M, S>,
+        timestamp: U256,
+    ) -> U256 {
         if market.total_shares > U256::zero() {
             self.smart_pool_shares * market.total_assets(timestamp) / market.total_shares
         } else {
@@ -85,7 +89,10 @@ impl Debug for Account {
 }
 
 impl Account {
-    pub fn new(address: Address, market_map: &HashMap<Address, FixedLender>) -> Self {
+    pub fn new<M: Middleware, S: Signer>(
+        address: Address,
+        market_map: &HashMap<Address, FixedLender<M, S>>,
+    ) -> Self {
         let mut markets = HashMap::<Address, AccountPosition>::new();
         for address in market_map.keys() {
             markets.insert(*address, AccountPosition::new());
@@ -190,11 +197,11 @@ impl Account {
     }
 
     pub fn liquidate_borrow(&mut self, _liquidate: LiquidateBorrowFilter, _fixed_lender: &Address) {
-        // It needs no action since the events emited by the repay_at_maturity are enough to liquidate the borrow
+        // It needs no action since the events emitted by the repay_at_maturity are enough to liquidate the borrow
     }
 
     pub fn asset_seized(&mut self, _seize: AssetSeizedFilter, _fixed_lender: &Address) {
-        // it needs no action since the events emited by the repay_at_maturity are enough to seixe the borrow's assets
+        // it needs no action since the events emitted by the repay_at_maturity are enough to seize the borrow's assets
     }
 
     pub fn set_collateral(&mut self, market: &Address) {
