@@ -9,11 +9,10 @@ use crate::credit_service::{
     ApprovalFilter, AssetSeizedFilter, AssetSourceSetFilter, BorrowAtMaturityFilter,
     CurveParametersSetFilter, DampSpeedSetFilter, DepositAtMaturityFilter, DepositFilter,
     InterestRateModelSetFilter, LiquidateBorrowFilter, LiquidationIncentiveSetFilter,
-    MarketAndMaturityUpdatedFilter, MarketEnteredFilter, MarketExitedFilter, MarketListedFilter,
-    MarketUpdatedFilter, MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter,
-    PenaltyRateSetFilter, RepayAtMaturityFilter, SmartPoolEarningsAccruedFilter,
-    SmartPoolReserveFactorSetFilter, SpFeeRateSetFilter, TransferFilter, UnpausedFilter,
-    WithdrawAtMaturityFilter, WithdrawFilter,
+    MarketEnteredFilter, MarketExitedFilter, MarketListedFilter, MarketUpdatedFilter,
+    MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter, PenaltyRateSetFilter,
+    RepayAtMaturityFilter, SmartPoolEarningsAccruedFilter, SmartPoolReserveFactorSetFilter,
+    SpFeeRateSetFilter, TransferFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +36,6 @@ pub enum ExactlyEvents {
     PausedFilter(PausedFilter),
     UnpausedFilter(UnpausedFilter),
     MarketUpdatedFilter(MarketUpdatedFilter),
-    MarketAndMaturityUpdatedFilter(MarketAndMaturityUpdatedFilter),
 
     // Auditor events
     MarketListedFilter(MarketListedFilter),
@@ -127,9 +125,6 @@ impl EthLogDecode for ExactlyEvents {
         }
         if let Ok(decoded) = MarketUpdatedFilter::decode_log(log) {
             return Ok(ExactlyEvents::MarketUpdatedFilter(decoded));
-        }
-        if let Ok(decoded) = MarketAndMaturityUpdatedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::MarketAndMaturityUpdatedFilter(decoded));
         }
 
         // Auditor events

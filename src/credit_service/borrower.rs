@@ -12,8 +12,8 @@ use super::{
 
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct AccountPosition {
-    pub maturity_supply_positions: HashMap<U256, (U256, U256)>,
-    pub maturity_borrow_positions: HashMap<U256, (U256, U256)>,
+    pub maturity_supply_positions: HashMap<U256, U256>,
+    pub maturity_borrow_positions: HashMap<U256, U256>,
     pub smart_pool_assets: U256,
     pub smart_pool_shares: U256,
     pub is_collateral: bool,
@@ -38,9 +38,9 @@ impl AccountPosition {
         Default::default()
     }
 
-    pub fn smart_pool_assets(&self, market: &mut FixedLender, timestamp: U256) -> U256 {
-        if market.total_shares() > U256::zero() {
-            self.smart_pool_shares * market.total_assets(timestamp) / market.total_shares()
+    pub fn smart_pool_assets(&self, market: &FixedLender, timestamp: U256) -> U256 {
+        if market.total_shares > U256::zero() {
+            self.smart_pool_shares * market.total_assets(timestamp) / market.total_shares
         } else {
             self.smart_pool_shares
         }
@@ -142,11 +142,10 @@ impl Account {
                 .maturity_supply_positions
                 .get_mut(&deposit.maturity)
                 .unwrap();
-            supply.0 += deposit.assets;
-            supply.1 += deposit.fee;
+            *supply += deposit.assets + deposit.fee;
         } else {
             data.maturity_supply_positions
-                .insert(deposit.maturity, (deposit.assets, deposit.fee));
+                .insert(deposit.maturity, deposit.assets + deposit.fee);
         }
     }
 
@@ -161,7 +160,7 @@ impl Account {
                 .get_mut(&withdraw.maturity)
                 .unwrap();
             // TODO check if this is correct
-            supply.0 -= withdraw.assets
+            *supply -= withdraw.assets;
         }
     }
 
@@ -176,23 +175,17 @@ impl Account {
                 .maturity_borrow_positions
                 .get_mut(&borrow.maturity)
                 .unwrap();
-            borrowed.0 += borrow.assets;
-            borrowed.1 += borrow.fee;
+            *borrowed += borrow.assets + borrow.fee;
         } else {
             data.maturity_borrow_positions
-                .insert(borrow.maturity, (borrow.assets, borrow.fee));
+                .insert(borrow.maturity, borrow.assets + borrow.fee);
         }
     }
 
     pub fn repay_at_maturity(&mut self, repay: &RepayAtMaturityFilter, market: &Address) {
         let data = self.positions.entry(*market).or_default();
-        if data.maturity_borrow_positions.contains_key(&repay.maturity) {
-            let mut borrowed = data.maturity_borrow_positions[&repay.maturity];
-            // TODO check if this is correct
-            let (principal, fee) =
-                FixedLender::scale_proportionally(borrowed, repay.position_assets);
-            borrowed.0 -= principal;
-            borrowed.1 -= fee;
+        if let Some(position) = data.maturity_borrow_positions.get_mut(&repay.maturity) {
+            *position -= repay.position_assets;
         }
     }
 
