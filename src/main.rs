@@ -18,21 +18,35 @@ async fn main() -> Result<()> {
     let config = Config::default();
     println!("Address provider: {:?} ", &config.address_provider);
 
-    dbg!(&config);
-
-    let provider = Provider::<Ws>::connect(config.eth_provider_rpc.clone()).await?;
+    let eth_provider_rpc = config.eth_provider_rpc.clone();
 
     // create a wallet and connect it to the provider
     let wallet = config.private_key.parse::<LocalWallet>()?;
 
-    let client: SignerMiddleware<Provider<Ws>, Wallet<SigningKey>> =
-        SignerMiddleware::new(provider.clone(), wallet);
+    dbg!(&config);
 
-    let client = Arc::new(client);
+    let mut credit_service: Option<CreditService<Provider<Ws>, Wallet<SigningKey>>> = None;
+    let update_client = false;
+    loop {
+        let provider_result = Provider::<Ws>::connect(eth_provider_rpc.clone()).await;
+        let provider = if let Ok(provider) = provider_result {
+            provider
+        } else {
+            println!("It wasn't possible to connect to the provider");
+            continue;
+        };
 
-    let mut credit_service = CreditService::new(client, config);
+        let client: SignerMiddleware<Provider<Ws>, Wallet<SigningKey>> =
+            SignerMiddleware::new(provider.clone(), wallet.clone());
 
-    credit_service.launch().await?;
-
-    Ok(())
+        let client = Arc::new(client);
+        if let Some(service) = &mut credit_service {
+            if update_client {
+                service.update_client(Arc::clone(&client), &config).await;
+            }
+            service.launch().await?;
+        } else {
+            credit_service = Some(CreditService::new(Arc::clone(&client), &config).await?);
+        }
+    }
 }

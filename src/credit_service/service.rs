@@ -48,8 +48,16 @@ pub struct CreditService<M, S> {
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
-    pub fn new(client: Arc<SignerMiddleware<M, S>>, config: Config) -> CreditService<M, S> {
-        let (auditor_address, _, block_number) = CreditService::<M, S>::parse_abi(&format!(
+    async fn get_contracts(
+        client: Arc<SignerMiddleware<M, S>>,
+        config: &Config,
+    ) -> (
+        u64,
+        Auditor<SignerMiddleware<M, S>>,
+        Previewer<SignerMiddleware<M, S>>,
+        ExactlyOracle<SignerMiddleware<M, S>>,
+    ) {
+        let (auditor_address, _, deployed_block) = CreditService::<M, S>::parse_abi(&format!(
             "lib/protocol/deployments/{}/Auditor.json",
             config.chain_id_name
         ));
@@ -59,17 +67,47 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             config.chain_id_name
         ));
 
-        CreditService {
+        let auditor = Auditor::new(auditor_address, Arc::clone(&client));
+        let previewer = Previewer::new(previewer_address, Arc::clone(&client));
+        let oracle = ExactlyOracle::new(Address::zero(), Arc::clone(&client));
+        (deployed_block, auditor, previewer, oracle)
+    }
+
+    pub async fn new(
+        client: Arc<SignerMiddleware<M, S>>,
+        config: &Config,
+    ) -> Result<CreditService<M, S>> {
+        let (deployed_block, auditor, previewer, oracle) =
+            Self::get_contracts(Arc::clone(&client), &config).await;
+
+        let auditor_markets = auditor.get_all_markets().call().await?;
+        let mut markets = HashMap::<Address, FixedLender<M, S>>::new();
+        for market in auditor_markets {
+            println!("Adding market {:?}", market);
+            markets
+                .entry(market)
+                .or_insert_with_key(|key| FixedLender::new(*key, &client));
+        }
+
+        Ok(CreditService {
             client: Arc::clone(&client),
-            last_sync: (U64::from(block_number - 1), -1, -1),
-            auditor: Auditor::new(auditor_address, Arc::clone(&client)),
-            previewer: Previewer::new(previewer_address, Arc::clone(&client)),
-            oracle: ExactlyOracle::new(Address::zero(), Arc::clone(&client)),
-            markets: HashMap::<Address, FixedLender<M, S>>::new(),
+            last_sync: (U64::from(deployed_block - 1), -1, -1),
+            auditor,
+            previewer,
+            oracle,
+            markets,
             sp_fee_rate: U256::zero(),
             borrowers: HashMap::new(),
             contracts_to_listen: HashMap::new(),
-        }
+        })
+    }
+
+    pub async fn update_client(&mut self, client: Arc<SignerMiddleware<M, S>>, config: &Config) {
+        let (_, auditor, previewer, oracle) =
+            Self::get_contracts(Arc::clone(&client), config).await;
+        self.auditor = auditor;
+        self.previewer = previewer;
+        self.oracle = oracle;
     }
 
     pub async fn launch(&mut self) -> Result<()> {
