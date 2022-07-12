@@ -89,6 +89,35 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 .or_insert_with_key(|key| FixedLender::new(*key, &client));
         }
 
+        let mut contracts_to_listen = HashMap::new();
+        markets.keys().for_each(|address| {
+            contracts_to_listen.insert(
+                ContractKey {
+                    address: *address,
+                    kind: ContractKeyKind::Market,
+                },
+                *address,
+            );
+        });
+
+        contracts_to_listen.insert(
+            ContractKey {
+                address: (*auditor).address(),
+                kind: ContractKeyKind::Auditor,
+            },
+            (*auditor).address(),
+        );
+
+        let interest_rate_model_address =
+            Address::from_str("0xeC00E4A3f1c170E57f0261632c139f8330BAfbA3")?;
+        contracts_to_listen.insert(
+            ContractKey {
+                address: interest_rate_model_address,
+                kind: ContractKeyKind::InterestRateModel,
+            },
+            interest_rate_model_address,
+        );
+
         Ok(CreditService {
             client: Arc::clone(&client),
             last_sync: (U64::from(deployed_block - 1), -1, -1),
@@ -98,7 +127,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             markets,
             sp_fee_rate: U256::zero(),
             borrowers: HashMap::new(),
-            contracts_to_listen: HashMap::new(),
+            contracts_to_listen,
         })
     }
 
@@ -108,42 +137,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         self.auditor = auditor;
         self.previewer = previewer;
         self.oracle = oracle;
+        for market in self.markets.values_mut() {
+            let address = market.contract.address();
+            market.contract = Market::new(address, Arc::clone(&client));
+        }
     }
 
     pub async fn launch(&mut self) -> Result<()> {
-        let markets = self.auditor.get_all_markets().call().await?;
-        for market in markets {
-            println!("Adding market {:?}", market);
-            self.markets
-                .entry(market)
-                .or_insert_with_key(|key| FixedLender::new(*key, &self.client));
-        }
-
-        self.markets.keys().for_each(|address| {
-            self.contracts_to_listen
-                .entry(ContractKey {
-                    address: *address,
-                    kind: ContractKeyKind::Market,
-                })
-                .or_insert_with_key(|key| key.address);
-        });
-
-        self.contracts_to_listen
-            .entry(ContractKey {
-                address: (*self.auditor).address(),
-                kind: ContractKeyKind::Auditor,
-            })
-            .or_insert_with_key(|key| key.address);
-
-        let interest_rate_model_address =
-            Address::from_str("0xeC00E4A3f1c170E57f0261632c139f8330BAfbA3")?;
-        self.contracts_to_listen
-            .entry(ContractKey {
-                address: interest_rate_model_address,
-                kind: ContractKeyKind::InterestRateModel,
-            })
-            .or_insert_with_key(|key| key.address);
-
         self.update().await?;
 
         let watcher = self.client.clone();
@@ -154,15 +154,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             .unwrap()
             .stream();
         while on_block.next().await.is_some() {
-            match self.update().await {
-                Err(e) => {
-                    println!("{}", &e);
-                }
-                _ => {}
-            }
+            self.update().await?;
 
             println!("zzzzz...");
-            let delay = time::Duration::from_secs(20);
+            let delay = time::Duration::from_secs(2);
             thread::sleep(delay);
         }
         Ok(())
@@ -183,7 +178,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         if !update {
             return Ok(());
         }
-        println!("call multicall for updating prices");
+        println!("call multicall for updating prices for block {}", block);
         let result = multicall.block(block).call_raw().await?;
         for (i, market) in self.markets.values_mut().filter(|m| m.listed).enumerate() {
             market.oracle_price = result[i].clone().into_uint().unwrap();
@@ -519,7 +514,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let func = contract
                     .liquidate(
                         borrower.address(),
-                        U256::MAX,
                         U256::MAX,
                         borrower.seizable_collateral().unwrap(),
                     )

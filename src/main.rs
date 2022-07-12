@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
     dbg!(&config);
 
     let mut credit_service: Option<CreditService<Provider<Ws>, Wallet<SigningKey>>> = None;
-    let update_client = false;
+    let mut update_client = false;
     loop {
         let provider_result = Provider::<Ws>::connect(eth_provider_rpc.clone()).await;
         let provider = if let Ok(provider) = provider_result {
@@ -42,11 +42,20 @@ async fn main() -> Result<()> {
         let client = Arc::new(client);
         if let Some(service) = &mut credit_service {
             if update_client {
+                println!("Updating client");
                 service.update_client(Arc::clone(&client), &config).await;
+                update_client = false;
             }
-            service.launch().await?;
         } else {
             credit_service = Some(CreditService::new(Arc::clone(&client), &config).await?);
         }
+        if let Some(service) = &mut credit_service {
+            if let Ok(_) = service.launch().await {
+                break;
+            } else {
+                update_client = true;
+            }
+        }
     }
+    Ok(())
 }
