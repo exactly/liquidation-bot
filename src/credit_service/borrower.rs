@@ -38,7 +38,7 @@ impl AccountPosition {
         Default::default()
     }
 
-    pub fn smart_pool_assets<M: Middleware, S: Signer>(
+    pub fn smart_pool_assets<M: 'static + Middleware, S: 'static + Signer>(
         &self,
         market: &FixedLender<M, S>,
         timestamp: U256,

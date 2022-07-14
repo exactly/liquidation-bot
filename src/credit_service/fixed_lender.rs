@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ethers::abi::Address;
-use ethers::prelude::{Middleware, Signer, SignerMiddleware, U256};
+use ethers::prelude::{abigen, Middleware, Signer, SignerMiddleware, U256};
+
+use eyre::Result;
 
 use super::Market;
 
@@ -34,15 +36,15 @@ pub struct FixedLender<M, S> {
     pub listed: bool,
 }
 
-impl<M: Middleware, S: Signer> Eq for FixedLender<M, S> {}
+impl<M: 'static + Middleware, S: 'static + Signer> Eq for FixedLender<M, S> {}
 
-impl<M: Middleware, S: Signer> PartialEq for FixedLender<M, S> {
+impl<M: 'static + Middleware, S: 'static + Signer> PartialEq for FixedLender<M, S> {
     fn eq(&self, other: &Self) -> bool {
         (*self.contract).address() == (*other.contract).address()
     }
 }
 
-impl<M: Middleware, S: Signer> FixedLender<M, S> {
+impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
     pub fn new(address: Address, client: &Arc<SignerMiddleware<M, S>>) -> Self {
         Self {
             contract: Market::new(address, Arc::clone(client)),
@@ -61,6 +63,31 @@ impl<M: Middleware, S: Signer> FixedLender<M, S> {
             price_feed: Default::default(),
             listed: Default::default(),
         }
+    }
+
+    pub async fn approve_wallet(&self, client: &Arc<SignerMiddleware<M, S>>) -> Result<()> {
+        let asset_address = self.contract.asset().call().await?;
+        abigen!(
+            Asset,
+            "lib/protocol/deployments/rinkeby/DAI.json",
+            event_derives(serde::Deserialize, serde::Serialize)
+        );
+        let asset = Asset::new(asset_address, Arc::clone(client));
+        let allowance = asset
+            .allowance(client.address(), self.contract.address())
+            .call()
+            .await?;
+        if allowance == U256::zero() {
+            let tx = asset.approve(self.contract.address(), U256::MAX);
+            let result = tx.send().await;
+            if let Ok(receipt) = result {
+                let result = receipt.await;
+                if let Err(_) = result {
+                    println!("Transactions not approved!");
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn total_assets(&self, timestamp: U256) -> U256 {

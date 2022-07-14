@@ -269,10 +269,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         .markets
                         .entry(data.fixed_lender)
                         .or_insert_with_key(|key| FixedLender::new(*key, &self.client));
-
                     market.decimals = data.decimals;
                     market.smart_pool_fee_rate = self.sp_fee_rate;
                     market.listed = true;
+                    market.approve_wallet(&self.client).await?;
                 }
 
                 ExactlyEvents::TransferFilter(data) => {
