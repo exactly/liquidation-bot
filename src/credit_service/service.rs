@@ -134,6 +134,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     pub async fn update_client(&mut self, client: Arc<SignerMiddleware<M, S>>, config: &Config) {
         let (_, auditor, previewer, oracle) =
             Self::get_contracts(Arc::clone(&client), config).await;
+        self.client = Arc::clone(&client);
         self.auditor = auditor;
         self.previewer = previewer;
         self.oracle = oracle;
@@ -497,32 +498,36 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 }
             }
         }
-        self.liquidate(&liquidations).await;
+        self.liquidate(&liquidations).await?;
 
         Ok(())
     }
 
-    async fn liquidate(&self, liquidations: &HashMap<Address, Account>) {
+    async fn liquidate(&self, liquidations: &HashMap<Address, Account>) -> Result<()> {
         for (_, borrower) in liquidations {
             println!("Liquidating borrower {:?}", borrower);
             if let Some(address) = &borrower.fixed_lender_to_liquidate() {
                 println!("Liquidating on fixed lender {:?}", address);
 
-                let contract =
-                    Market::<SignerMiddleware<M, S>>::new(*address, Arc::clone(&&self.client));
+                // let contract =
+                //     Market::<SignerMiddleware<M, S>>::new(*address, Arc::clone(&&self.client));
 
-                let func = contract
+                let func = self.markets[address]
+                    .contract
                     .liquidate(
                         borrower.address(),
                         U256::MAX,
                         borrower.seizable_collateral().unwrap(),
                     )
                     .gas(6_666_666);
-                let tx = func.send().await.unwrap();
-                let receipt = tx.await.unwrap();
+                let tx = func.send().await;
+                println!("tx: {:?}", &tx);
+                let tx = tx?;
+                let receipt = tx.await?;
                 println!("Liquidation tx {:?}", receipt);
             }
         }
+        Ok(())
     }
 
     async fn multicall_previewer(&self, block: U64) -> HashMap<Address, Vec<MarketAccount>> {
