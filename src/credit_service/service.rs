@@ -272,7 +272,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     market.decimals = data.decimals;
                     market.smart_pool_fee_rate = self.sp_fee_rate;
                     market.listed = true;
-                    market.approve_wallet(&self.client).await?;
+                    market.approve_asset(&self.client).await?;
                 }
 
                 ExactlyEvents::TransferFilter(data) => {
@@ -852,7 +852,9 @@ total_assets = {:?}",
                     current_debt += (timestamp - maturity) * U256::from(market.penalty_rate)
                 }
             }
-            debt += current_debt * market.oracle_price / U256::exp10(market.decimals as usize);
+            debt += current_debt * market.oracle_price * U256::exp10(18)
+                / U256::from(market.adjust_factor)
+                / U256::exp10(market.decimals as usize);
             if current_debt > fixed_lender_to_liquidate.0 {
                 fixed_lender_to_liquidate = (current_debt, Some(*market_address));
             }

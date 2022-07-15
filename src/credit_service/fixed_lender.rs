@@ -10,6 +10,12 @@ use super::Market;
 
 const INTERVAL: u64 = 4 * 7 * 86_400;
 
+abigen!(
+    ERC20,
+    "lib/protocol/deployments/rinkeby/DAI.json",
+    event_derives(serde::Deserialize, serde::Serialize)
+);
+
 #[derive(Eq, PartialEq, Debug, Default)]
 pub struct FixedPool {
     pub borrowed: U256,
@@ -65,19 +71,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
         }
     }
 
-    pub async fn approve_wallet(&self, client: &Arc<SignerMiddleware<M, S>>) -> Result<()> {
+    pub async fn approve_asset(&self, client: &Arc<SignerMiddleware<M, S>>) -> Result<()> {
         let asset_address = self.contract.asset().call().await?;
-        abigen!(
-            Asset,
-            "lib/protocol/deployments/rinkeby/DAI.json",
-            event_derives(serde::Deserialize, serde::Serialize)
-        );
-        let asset = Asset::new(asset_address, Arc::clone(client));
+        let asset = ERC20::new(asset_address, Arc::clone(client));
         let allowance = asset
             .allowance(client.address(), self.contract.address())
             .call()
             .await?;
-        if allowance == U256::zero() {
+        if allowance < U256::MAX / 2u128 {
             let tx = asset.approve(self.contract.address(), U256::MAX);
             let result = tx.send().await;
             if let Ok(receipt) = result {
