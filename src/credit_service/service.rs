@@ -432,7 +432,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         let to = self.client.provider().get_block_number().await?;
 
         println!("Block: {:?}", to);
-        if self.last_sync == (to, -1, -1) {
+        if self.last_sync == (to + 1, -1, -1) {
             return Ok(());
         }
 
@@ -470,7 +470,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
         self.last_sync = self.handle_events(events, self.last_sync).await?;
         if let (_, -1, -1) = self.last_sync {
-            self.last_sync.0 = to + 1u64
+            self.last_sync.0 = to + 1;
         } else {
             return Ok(());
         }
