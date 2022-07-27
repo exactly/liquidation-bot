@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ethers::prelude::k256::ecdsa::SigningKey;
-use ethers::prelude::{Http, Provider, Signer, SignerMiddleware, Wallet};
+use ethers::prelude::{Provider, Signer, SignerMiddleware, Wallet, Ws};
 use eyre::Result;
 
 use crate::config::Config;
@@ -10,13 +10,14 @@ use crate::credit_service::CreditService;
 mod bindings;
 mod config;
 mod credit_service;
+mod debounce;
 
 async fn create_client(
     config: &Config,
     eth_provider_rpc: &String,
-) -> Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>> {
+) -> Arc<SignerMiddleware<Provider<Ws>, Wallet<SigningKey>>> {
     loop {
-        let provider_result = Provider::<Http>::try_from(eth_provider_rpc.clone());
+        let provider_result = Provider::<Ws>::connect(eth_provider_rpc.clone()).await;
         let provider = if let Ok(provider) = provider_result {
             provider
         } else {
@@ -39,7 +40,7 @@ async fn main() -> Result<()> {
 
     dbg!(&config);
 
-    let mut credit_service: Option<CreditService<Provider<Http>, Wallet<SigningKey>>> = None;
+    let mut credit_service: Option<CreditService<Provider<Ws>, Wallet<SigningKey>>> = None;
     let mut update_client = false;
     let mut last_client = None;
     loop {
