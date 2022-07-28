@@ -40,22 +40,17 @@ impl Default for Config {
         let (chain_id_name, eth_provider_rpc, etherscan) = match chain_id {
             1 => (
                 "mainnet",
-                get_env_or_throw("ETH_MAINNET_PROVIDER"),
+                get_env_or_throw("MAINNET_NODE"),
                 "https://etherscan.io",
             ),
             4 => (
                 "rinkeby",
-                get_env_or_throw("ETH_RINKEBY_PROVIDER"),
+                get_env_or_throw("RINKEBY_NODE"),
                 "https://rinkeby.etherscan.io",
-            ),
-            42 => (
-                "kovan",
-                get_env_or_throw("ETH_KOVAN_PROVIDER"),
-                "https://kovan.etherscan.io",
             ),
             1337 => (
                 "fork",
-                get_env_or_throw("ETH_FORK_PROVIDER"),
+                get_env_or_throw("FORK_NODE"),
                 "https://etherscan.io",
             ),
 
