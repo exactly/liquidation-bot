@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ethers::prelude::k256::ecdsa::SigningKey;
-use ethers::prelude::{Http, LocalWallet, Provider, Signer, SignerMiddleware, Wallet};
+use ethers::prelude::{Http, Provider, Signer, SignerMiddleware, Wallet};
 use eyre::Result;
 
 use crate::config::Config;
@@ -12,7 +12,6 @@ mod config;
 mod credit_service;
 
 async fn create_client(
-    // wallet: &Wallet<SigningKey>,
     config: &Config,
     eth_provider_rpc: &String,
 ) -> Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>> {
@@ -24,14 +23,8 @@ async fn create_client(
             println!("It wasn't possible to connect to the provider");
             continue;
         };
-        // create a wallet and connect it to the provider
-        let wallet = config.private_key.parse::<LocalWallet>();
-        if let Ok(wallet) = wallet {
-            let wallet = wallet.with_chain_id(config.chain_id);
-            let client = SignerMiddleware::new(provider.clone(), wallet.clone());
-            let client = Arc::new(client);
-            return client;
-        }
+        let wallet = config.wallet.clone().with_chain_id(config.chain_id);
+        return Arc::new(SignerMiddleware::new(provider, wallet));
     }
 }
 

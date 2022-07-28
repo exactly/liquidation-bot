@@ -1,5 +1,5 @@
 extern crate dotenv;
-use ethers::prelude::Address;
+use ethers::prelude::{Address, MnemonicBuilder, Wallet, coins_bip39::English, k256::ecdsa::SigningKey};
 use std::env;
 use std::fmt::Debug;
 
@@ -7,7 +7,7 @@ use std::fmt::Debug;
 pub struct Config {
     pub chain_id: u64,
     pub chain_id_name: String,
-    pub private_key: String,
+    pub wallet: Wallet<SigningKey>,
     pub eth_provider_rpc: String,
     pub address_provider: Address,
     pub path_finder: Address,
@@ -22,13 +22,15 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         dotenv::from_filename(".env").ok();
-        dotenv::from_filename(".env.local").ok();
         let chain_id = get_env_or_throw("CHAIN_ID")
             .parse::<u64>()
             .expect("CHAIN_ID is not number");
         let address_provider = Address::zero();
 
-        let private_key = get_env_or_throw("PRIVATE_KEY");
+        let wallet = MnemonicBuilder::<English>::default()
+            .phrase(env::var("MNEMONIC").unwrap().as_str())
+            .build()
+            .unwrap();
         let path_finder = Address::zero();
         let ampq_addr = env::var("CLOUDAMQP_URL").unwrap_or("".into());
         let ampq_router_key = env::var("CLOUDAMQP_ROUTER").unwrap_or("".into());
@@ -72,7 +74,7 @@ impl Default for Config {
             chain_id,
             chain_id_name: chain_id_name.into(),
             address_provider,
-            private_key,
+            wallet,
             eth_provider_rpc,
             path_finder,
             ampq_addr,
