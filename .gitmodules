@@ -1,7 +1,0 @@
-[submodule "lib/protocol"]
-	path = lib/protocol
-	url = git@github.com:exactly-finance/protocol.git
-	branch = deploy
-[submodule "lib/chainlink"]
-	path = lib/chainlink
-	url = https://github.com/smartcontractkit/chainlink-brownie-contracts.git

@@ -1,0 +1,16 @@
+{
+  "extends": "solhint:recommended",
+  "plugins": ["prettier"],
+  "rules": {
+    "max-line-length": ["error", 120],
+    "compiler-version": ["error", "0.8.15"],
+    "func-visibility": ["error", { "ignoreConstructors": true }],
+    "func-param-name-mixedcase": "error",
+    "modifier-name-mixedcase": "error",
+    "constructor-syntax": "error",
+    "no-inline-assembly": "off",
+    "not-rely-on-time": "off",
+    "reason-string": "off",
+    "prettier/prettier": "error"
+  }
+}

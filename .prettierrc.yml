@@ -1,0 +1,6 @@
+compiler: 0.8.15
+tabWidth: 2
+printWidth: 120
+trailingComma: all
+explicitTypes: always
+bracketSpacing: true

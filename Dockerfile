@@ -6,7 +6,7 @@ WORKDIR /
 COPY Cargo.toml .
 COPY Cargo.lock .
 COPY src src
-COPY lib lib
+COPY node_modules node_modules
 
 RUN cargo build
 
