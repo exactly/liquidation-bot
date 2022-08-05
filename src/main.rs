@@ -10,7 +10,6 @@ use crate::credit_service::CreditService;
 mod bindings;
 mod config;
 mod credit_service;
-mod debounce;
 
 async fn create_client(
     config: &Config,
@@ -52,14 +51,20 @@ async fn main() -> Result<()> {
                     update_client = false;
                 }
             } else {
+                println!("CREATING CREDIT SERVICE");
                 credit_service = Some(CreditService::new(Arc::clone(client), &config).await?);
             }
-            if let Some(service) = &mut credit_service {
-                match service.launch().await {
-                    Ok(_) => break,
+            if let Some(service) = credit_service {
+                credit_service = match service.launch().await {
+                    Ok(current_service) => {
+                        println!("CREDIT SERVICE ERROR");
+                        Some(current_service)
+                    }
                     Err(e) => {
-                        println!("error: {:?}", e);
+                        println!("CREDIT SERVICE ERROR");
+                        // println!("error: {:?}", e);
                         update_client = true;
+                        Some(e)
                     }
                 }
             }
@@ -67,5 +72,5 @@ async fn main() -> Result<()> {
             last_client = Some(create_client(&config, &eth_provider_rpc).await);
         }
     }
-    Ok(())
+    // Ok(())
 }

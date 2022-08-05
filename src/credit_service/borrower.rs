@@ -128,13 +128,19 @@ impl Account {
     }
 
     pub fn deposit(&mut self, deposit: &DepositFilter, market: &Address) {
+        println!("User deposited - {:#?} {:#?}", self.address, deposit.assets);
         let data = self.positions.entry(*market).or_default();
         data.smart_pool_assets += deposit.assets;
         data.smart_pool_shares += deposit.shares;
+        println!("total deposited by user: {:#?}", data.smart_pool_assets);
     }
 
     pub fn withdraw(&mut self, withdraw: &WithdrawFilter, market: &Address) {
         let data = self.positions.entry(*market).or_default();
+        println!(
+            "user {:#?}\nmarket {:#?}\nsmart_pool_assets {:#?} - withdraw {:#?}",
+            self.address, market, data.smart_pool_assets, withdraw.assets
+        );
         data.smart_pool_assets -= withdraw.assets;
         data.smart_pool_shares -= withdraw.shares;
     }

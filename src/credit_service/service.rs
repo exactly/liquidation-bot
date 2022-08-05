@@ -1,7 +1,6 @@
 use crate::bindings::ExactlyEvents;
 use crate::config::Config;
 use crate::credit_service::{Account, Auditor, FixedLender, Market};
-use crate::debounce::debounce;
 use ethers::prelude::{
     abi::{Abi, RawLog},
     types::Filter,
@@ -9,19 +8,20 @@ use ethers::prelude::{
 };
 use ethers::prelude::{Log, PubsubClient};
 use eyre::Result;
-use futures::stream::repeat;
 use serde_json::Value;
 use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
+use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::Mutex;
+use tokio::time;
 use tokio_stream::StreamExt;
 
 use super::{ExactlyOracle, MarketAccount, Previewer};
 
-#[derive(Eq, PartialEq, Hash, Clone, Copy)]
+#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
 enum ContractKeyKind {
     Market,
     PriceFeed,
@@ -35,12 +35,13 @@ enum LogIterating {
     UpdateFilters,
 }
 
-#[derive(Eq, PartialEq, Hash, Clone, Copy)]
+#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
 struct ContractKey {
     address: Address,
     kind: ContractKeyKind,
 }
 
+// #[derive(Debug)]
 pub struct CreditService<M, S> {
     client: Arc<SignerMiddleware<M, S>>,
     last_sync: (U64, i128, i128),
@@ -51,6 +52,12 @@ pub struct CreditService<M, S> {
     sp_fee_rate: U256,
     borrowers: HashMap<Address, Account>,
     contracts_to_listen: HashMap<ContractKey, Address>,
+}
+
+impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for CreditService<M, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreditService").finish()
+    }
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
@@ -150,33 +157,64 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         }
     }
 
-    pub async fn launch(&mut self) -> Result<()>
+    pub async fn launch(self) -> Result<Self, Self>
     where
         <M as Middleware>::Provider: PubsubClient,
     {
-        let works = Arc::new(Mutex::new(0));
-        let position_checker_works = Arc::clone(&works);
-        let position_checker_handler = thread::spawn(move || {
-            let stream = debounce(Duration::from_secs(2), repeat("test"));
-            while let Some(msg) = stream.next().await {
-                let mut work = position_checker_works.lock().unwrap();
-                *work += 1;
+        let service = Arc::new(Mutex::new(self));
+        let (debounce_tx, mut debounce_rx) = mpsc::channel(10);
+        let me = Arc::clone(&service);
+        let a = tokio::spawn(async move {
+            let mut block_number = None;
+            loop {
+                match time::timeout(Duration::from_millis(2_000), debounce_rx.recv()).await {
+                    Ok(Some(block)) => {
+                        block_number = block;
+                        println!("just received log");
+                    }
+                    Ok(None) => {
+                        println!("check_liquidations");
+                    }
+                    Err(_) => {
+                        println!("{:?}ms since network activity", 2_000);
+                        if let Some(block) = block_number {
+                            let _ = me.lock().await.check_liquidations(block).await;
+                        }
+                    }
+                }
             }
         });
-
+        println!(
+            "=================test===================== {:#?}",
+            service.lock().await.last_sync
+        );
         'filter: loop {
-            let filter = Filter::new().from_block(self.last_sync.0).address(
-                self.contracts_to_listen
-                    .values()
-                    .cloned()
-                    .collect::<Vec<Address>>(),
-            );
-            let client = Arc::clone(&self.client);
-            let stream_error = client.subscribe_logs(&filter).await;
+            let client;
+            let stream_error;
+            {
+                let service_unlocked = service.lock().await;
+                println!("1");
+                let filter = Filter::new()
+                    .from_block(service_unlocked.last_sync.0)
+                    .address(
+                        service_unlocked
+                            .contracts_to_listen
+                            .values()
+                            .cloned()
+                            .collect::<Vec<Address>>(),
+                    );
+                println!("2");
+
+                client = Arc::clone(&service_unlocked.client);
+                println!("3");
+                stream_error = client.subscribe_logs(&filter).await;
+                println!("4");
+            }
             match stream_error {
                 Ok(mut stream) => {
                     while let Some(log) = stream.next().await {
-                        let status = self.update(log).await;
+                        let mut me = service.lock().await;
+                        let status = me.handle_log(log, &debounce_tx).await;
                         match status {
                             Ok(result) => {
                                 if let LogIterating::UpdateFilters = result {
@@ -187,11 +225,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         };
                     }
                 }
-                _ => break,
+                _ => {
+                    println!("error to subscribe");
+                    break;
+                }
             };
         }
-        position_checker_handler.join().unwrap();
-        Ok(())
+        a.abort();
+        Ok(Arc::try_unwrap(service).unwrap().into_inner())
     }
 
     async fn update_prices(&mut self, block: U64) -> Result<()> {
@@ -218,11 +259,18 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         Ok(())
     }
 
-    async fn handle_events(
-        &mut self,
-        (event, meta): (ExactlyEvents, LogMeta),
-        from: (U64, i128, i128),
-    ) -> Result<(U64, i128, i128)> {
+    // handle a new received log
+    async fn handle_log(&mut self, log: Log, sender: &Sender<Option<U64>>) -> Result<LogIterating> {
+        let meta = LogMeta::from(&log);
+        let result = ExactlyEvents::decode_log(&RawLog {
+            topics: log.topics,
+            data: log.data.to_vec(),
+        });
+        if let Err(_) = &result {
+            println!("{:?}", meta);
+        }
+        let event = result?;
+
         println!(
             "---->     Contract {:?} - {}",
             meta.address, meta.block_number
@@ -231,9 +279,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             meta.block_number,
             meta.transaction_index.as_u64() as i128,
             meta.log_index.as_u128() as i128,
-        ) <= from
+        ) <= self.last_sync
         {
-            return Ok((meta.block_number, -1, -1));
+            return Ok(LogIterating::NextLog);
         }
         println!("{:?}, {:?}", event, meta);
         match event {
@@ -252,12 +300,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         address: (*self.auditor).address(),
                         kind: ContractKeyKind::Oracle,
                     })
-                    .or_insert(data.oracle);
-                return Ok((
+                    .or_insert(data.new_oracle);
+                self.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
                     meta.log_index.as_u128() as i128,
-                ));
+                );
+                sender.send(log.block_number).await?;
+                return Ok(LogIterating::UpdateFilters);
             }
 
             ExactlyEvents::EarningsAccumulatorSmoothFactorSetFilter(data) => {
@@ -289,16 +339,36 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 }
             }
             ExactlyEvents::DepositFilter(data) => {
+                println!("number of borrowers - 0: {:#?}", self.borrowers.len());
                 self.borrowers
                     .entry(data.owner)
                     .or_insert_with(|| Account::new(data.owner, &self.markets))
                     .deposit(&data, &meta.address);
+                println!("number of borrowers - 1: {:#?}", self.borrowers.len());
+                if data.owner
+                    == Address::from_str("0x9ca61a949242ea4cd131f11f7ccd9b63148654ea").unwrap()
+                {
+                    if let Some(borrower) = self.borrowers.get(&data.owner) {
+                        println!(">>>> borrower positions: {:#?}", borrower.positions);
+                    } else {
+                        println!(">>>> no such borrower");
+                    }
+                }
             }
             ExactlyEvents::WithdrawFilter(data) => {
                 self.borrowers
                     .entry(data.owner)
                     .or_insert_with(|| Account::new(data.owner, &self.markets))
                     .withdraw(&data, &meta.address);
+                if data.owner
+                    == Address::from_str("0x9ca61a949242ea4cd131f11f7ccd9b63148654ea").unwrap()
+                {
+                    if let Some(borrower) = self.borrowers.get(&data.owner) {
+                        println!(">>>> borrower positions: {:#?}", borrower.positions);
+                    } else {
+                        println!(">>>> no such borrower");
+                    }
+                }
             }
             ExactlyEvents::DepositAtMaturityFilter(data) => {
                 self.borrowers
@@ -438,40 +508,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 println!("Event not handled - {:?}", event);
             }
         }
-        Ok((U64::zero(), -1, -1))
+
+        sender.send(log.block_number).await?;
+        Ok(LogIterating::NextLog)
     }
 
-    // Updates information for new blocks
-    async fn update(&mut self, log: Log) -> Result<LogIterating> {
-        let block_number = if let Some(block) = log.block_number {
-            block
-        } else {
-            U64::zero()
-        };
-        let meta = LogMeta::from(&log);
-        let result = ExactlyEvents::decode_log(&RawLog {
-            topics: log.topics,
-            data: log.data.to_vec(),
-        });
-        if let Err(_) = &result {
-            println!("{:?}", meta);
-        }
-        let event = (result?, meta);
-
-        self.last_sync = self.handle_events(event, self.last_sync).await?;
-        let mut new_block = false;
-        if let (block, -1, -1) = self.last_sync {
-            if block > U64::zero() {
-                return Ok(LogIterating::NextLog);
-            }
-            if block_number > self.last_sync.0 {
-                new_block = true;
-            }
-            self.last_sync.0 = block_number;
-        } else {
-            return Ok(LogIterating::UpdateFilters);
-        }
-
+    async fn check_liquidations(&mut self, block_number: U64) -> Result<()> {
+        println!("check_liquidations");
         // let previewer_borrowers = self.multicall_previewer(U64::from(&to)).await;
         let to_timestamp = self
             .client
@@ -484,10 +527,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             self.update_prices(block_number).await?;
         }
 
-        // if new_block {
-        //     self.compare_positions(block_number, to_timestamp).await?;
-        // }
-
         let mut liquidations: HashMap<Address, Account> = HashMap::new();
         for (address, borrower) in self.borrowers.iter_mut() {
             let hf = Self::compute_hf(&mut self.markets, borrower, to_timestamp);
@@ -498,8 +537,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             }
         }
         self.liquidate(&liquidations).await?;
-
-        Ok(LogIterating::NextLog)
+        Ok(())
     }
 
     async fn liquidate(&self, liquidations: &HashMap<Address, Account>) -> Result<()> {
