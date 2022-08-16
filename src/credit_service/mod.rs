@@ -45,3 +45,15 @@ abigen!(
     "node_modules/@chainlink/contracts/abi/v0.8/AggregatorV2V3Interface.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
+
+abigen!(
+    AggregatorProxy,
+    "node_modules/@chainlink/contracts/abi/v0.7/AggregatorProxyInterface.json",
+    event_derives(serde::Deserialize, serde::Serialize)
+);
+
+abigen!(
+    Liquidator,
+    "deployments/rinkeby/Liquidator.json",
+    event_derives(serde::Deserialize, serde::Serialize)
+);

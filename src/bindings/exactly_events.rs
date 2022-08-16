@@ -8,16 +8,18 @@ use crate::credit_service::{
         AdminChangedFilter, InitializedFilter, RoleAdminChangedFilter, RoleGrantedFilter,
         RoleRevokedFilter, UpgradedFilter,
     },
-    AccumulatorAccrualFilter, AdjustFactorSetFilter, AnswerUpdatedFilter, ApprovalFilter,
-    BackupFeeRateSetFilter, BorrowAtMaturityFilter, BorrowFilter, DampSpeedSetFilter,
-    DepositAtMaturityFilter, DepositFilter, EarningsAccumulatorSmoothFactorSetFilter,
-    FixedEarningsUpdateFilter, FixedParametersSetFilter, FloatingDebtUpdateFilter,
-    InterestRateModelSetFilter, LiquidateFilter, LiquidationIncentiveSetFilter,
-    MarketEnteredFilter, MarketExitedFilter, MarketListedFilter, MarketUpdateFilter,
-    MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter, PenaltyRateSetFilter,
-    PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter, ReserveFactorSetFilter, SeizeFilter,
-    TransferFilter, TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
+    pricefeed_mod::{AnswerUpdatedFilter, NewRoundFilter},
+    AccumulatorAccrualFilter, AdjustFactorSetFilter, ApprovalFilter, BackupFeeRateSetFilter,
+    BorrowAtMaturityFilter, BorrowFilter, DampSpeedSetFilter, DepositAtMaturityFilter,
+    DepositFilter, EarningsAccumulatorSmoothFactorSetFilter, FixedEarningsUpdateFilter,
+    FixedParametersSetFilter, FloatingDebtUpdateFilter, InterestRateModelSetFilter,
+    LiquidateFilter, LiquidationIncentiveSetFilter, MarketEnteredFilter, MarketExitedFilter,
+    MarketListedFilter, MarketUpdateFilter, MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter,
+    PenaltyRateSetFilter, PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter,
+    ReserveFactorSetFilter, SeizeFilter, TransferFilter, TreasurySetFilter, UnpausedFilter,
+    WithdrawAtMaturityFilter, WithdrawFilter,
 };
+use aggregator_mod::NewTransmissionFilter;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExactlyEvents {
@@ -69,9 +71,10 @@ pub enum ExactlyEvents {
 
     // ExactlyOracle events
     PriceFeedSetFilter(PriceFeedSetFilter),
-
     // PriceFeed
     AnswerUpdatedFilter(AnswerUpdatedFilter),
+    NewRoundFilter(NewRoundFilter),
+    NewTransmissionFilter(NewTransmissionFilter),
 }
 
 impl EthLogDecode for ExactlyEvents {
@@ -215,7 +218,47 @@ impl EthLogDecode for ExactlyEvents {
             return Ok(ExactlyEvents::AnswerUpdatedFilter(decoded));
         }
 
+        if let Ok(decoded) = NewRoundFilter::decode_log(log) {
+            return Ok(ExactlyEvents::NewRoundFilter(decoded));
+        }
+
+        if let Ok(decoded) = NewTransmissionFilter::decode_log(log) {
+            return Ok(ExactlyEvents::NewTransmissionFilter(decoded));
+        }
+
         println!("Missing event: {:?}", log);
         Err(Error::InvalidData)
+    }
+}
+
+mod aggregator_mod {
+    use ethers::{
+        prelude::{EthDisplay, EthEvent},
+        types::{Address, Bytes, I256},
+    };
+
+    #[derive(
+        Clone,
+        Debug,
+        Default,
+        Eq,
+        PartialEq,
+        EthEvent,
+        EthDisplay,
+        serde::Deserialize,
+        serde::Serialize,
+    )]
+    #[ethevent(
+        name = "NewTransmission",
+        abi = "NewTransmission(uint32,int192,address,int192[],bytes,bytes32)"
+    )]
+    pub struct NewTransmissionFilter {
+        #[ethevent(indexed)]
+        pub aggregator_round_id: u32,
+        pub answer: I256,
+        pub transmitter: Address,
+        pub observations: Vec<I256>,
+        pub observers: Bytes,
+        pub raw_report_context: [u8; 32],
     }
 }
