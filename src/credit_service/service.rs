@@ -2,6 +2,7 @@ use crate::bindings::ExactlyEvents;
 use crate::config::Config;
 use crate::credit_service::{Account, AggregatorProxy, Auditor, FixedLender, Market};
 use ethers::abi::Tokenizable;
+use ethers::prelude::signer::SignerMiddlewareError;
 use ethers::prelude::{
     abi::{Abi, RawLog},
     types::Filter,
@@ -34,6 +35,13 @@ enum ContractKeyKind {
 enum LogIterating {
     NextLog,
     UpdateFilters,
+}
+
+#[derive(Debug)]
+enum TaskActivity {
+    StartCheckLiquidation,
+    StopCheckLiquidation,
+    BlockUpdated(Option<U64>),
 }
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
@@ -183,24 +191,32 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     where
         <M as Middleware>::Provider: PubsubClient,
     {
+        const PAGE_SIZE: u64 = 10000;
         let service = Arc::new(Mutex::new(self));
         let (debounce_tx, mut debounce_rx) = mpsc::channel(10);
         let me = Arc::clone(&service);
         let a = tokio::spawn(async move {
             let mut block_number = None;
+            let mut check_liquidations = false;
             loop {
                 match time::timeout(Duration::from_millis(2_000), debounce_rx.recv()).await {
-                    Ok(Some(block)) => {
-                        block_number = block;
-                        println!("just received log");
-                    }
+                    Ok(Some(activity)) => match activity {
+                        TaskActivity::StartCheckLiquidation => check_liquidations = true,
+                        TaskActivity::StopCheckLiquidation => check_liquidations = false,
+                        TaskActivity::BlockUpdated(block) => {
+                            block_number = block;
+                            println!("### just received log");
+                        }
+                    },
                     Ok(None) => {
-                        println!("end of stream");
+                        println!("### end of stream");
                     }
                     Err(_) => {
-                        println!("{:?}ms since network activity", 2_000);
-                        if let Some(block) = block_number {
-                            let _ = me.lock().await.check_liquidations(block).await;
+                        println!("### {:?}ms since network activity", 2_000);
+                        if check_liquidations {
+                            if let Some(block) = block_number {
+                                let _ = me.lock().await.check_liquidations(block).await;
+                            }
                         }
                     }
                 }
@@ -210,57 +226,59 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             "=================test===================== {:#?}",
             service.lock().await.last_sync
         );
+        let mut first_block = service.lock().await.last_sync.0;
+        let mut last_block = first_block + PAGE_SIZE;
+        let mut latest_block = U64::zero();
+        let mut getting_logs = true;
         'filter: loop {
             let client;
-            let stream_error;
-            {
+            let result = {
                 let service_unlocked = service.lock().await;
                 println!("update filter: {:#?}", service_unlocked.contracts_to_listen);
-                let filter = Filter::new()
-                    .from_block(service_unlocked.last_sync.0)
-                    .address(
-                        service_unlocked
-                            .contracts_to_listen
-                            .values()
-                            .cloned()
-                            .collect::<Vec<Address>>(),
-                    );
-
                 client = Arc::clone(&service_unlocked.client);
-                stream_error = client.subscribe_logs(&filter).await;
-            }
-            match stream_error {
-                Ok(mut stream) => {
-                    let mut last_block = U64::zero();
-                    while let Some(log) = stream.next().await {
-                        if let Some(block_number) = log.block_number {
-                            if block_number != last_block {
-                                if last_block > U64::zero() {
-                                    let to_timestamp = service
-                                        .lock()
-                                        .await
-                                        .client
-                                        .provider()
-                                        .get_block(last_block)
-                                        .await
-                                        .unwrap()
-                                        .unwrap()
-                                        .timestamp;
-                                    service
-                                        .lock()
-                                        .await
-                                        .compare_accounts(U64::from(last_block), to_timestamp)
-                                        .await
-                                        .unwrap();
-                                }
-                                last_block = block_number;
-                            }
-                        }
-                        let mut me = service.lock().await;
+                if latest_block.is_zero() {
+                    latest_block = client
+                        .get_block_number()
+                        .await
+                        .unwrap_or(service_unlocked.last_sync.0);
+                }
+
+                let mut filter = Filter::new().from_block(first_block).address(
+                    service_unlocked
+                        .contracts_to_listen
+                        .values()
+                        .cloned()
+                        .collect::<Vec<Address>>(),
+                );
+                println!(">>> Start block: {}", first_block);
+                if getting_logs {
+                    println!(">>> Last block: {}", last_block);
+                    filter = filter.to_block(last_block);
+                    let result = client.get_logs(&filter).await;
+                    if let Ok(logs) = result {
+                        (None, Some(logs))
+                    } else {
+                        a.abort();
+                        break 'filter;
+                    }
+                } else {
+                    println!(">>> Getting stream");
+                    (Some(client.subscribe_logs(&filter).await), None)
+                }
+            };
+            match result {
+                (None, Some(logs)) => {
+                    _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
+                    let mut me = service.lock().await;
+                    for log in logs {
+                        println!("handle get log");
                         let status = me.handle_log(log, &debounce_tx).await;
+                        println!("handled log");
                         match status {
                             Ok(result) => {
                                 if let LogIterating::UpdateFilters = result {
+                                    println!(">>> update filter, keep current first block");
+                                    first_block = me.last_sync.0;
                                     continue 'filter;
                                 }
                             }
@@ -270,14 +288,89 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                             }
                         };
                     }
+                    if last_block >= latest_block {
+                        println!(">>> reach the end");
+                        first_block = last_block + 1u64;
+                        getting_logs = false;
+                    } else {
+                        first_block = last_block + 1u64;
+                        last_block = if first_block + PAGE_SIZE > latest_block {
+                            println!(">>> go to final block");
+                            latest_block
+                        } else {
+                            println!(">>> next page");
+                            last_block + PAGE_SIZE
+                        };
+                    }
                 }
-                _ => {
-                    println!("error to subscribe");
-                    break;
+                (Some(stream), None) => {
+                    _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
+                    println!(">>> checking stream");
+                    match stream {
+                        Ok(mut stream) => {
+                            // let mut last_block = U64::zero();
+                            println!(">>> waiting next block");
+                            while let Some(log) = stream.next().await {
+                                // if let Some(block_number) = log.block_number {
+                                //     if block_number != last_block {
+                                //         if last_block > U64::zero() {
+                                //             let to_timestamp = service
+                                //                 .lock()
+                                //                 .await
+                                //                 .client
+                                //                 .provider()
+                                //                 .get_block(last_block)
+                                //                 .await
+                                //                 .unwrap()
+                                //                 .unwrap()
+                                //                 .timestamp;
+                                //             service
+                                //                 .lock()
+                                //                 .await
+                                //                 .compare_accounts(U64::from(last_block), to_timestamp)
+                                //                 .await
+                                //                 .unwrap();
+                                //         }
+                                //         last_block = block_number;
+                                //     }
+                                // }
+                                println!(">>> lock service");
+                                let mut me = service.lock().await;
+                                println!(">>> service locked");
+                                let status = me.handle_log(log, &debounce_tx).await;
+                                match status {
+                                    Ok(result) => {
+                                        if let LogIterating::UpdateFilters = result {
+                                            first_block = me.last_sync.0;
+                                            continue 'filter;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!("Error {:#?}", e);
+                                        break 'filter;
+                                    }
+                                };
+                            }
+                        }
+                        e => {
+                            if let Err(error) = e {
+                                if let SignerMiddlewareError::MiddlewareError(m) = error {
+                                    println!("error to subscribe {:#?}", m);
+                                    continue;
+                                }
+                            }
+                            println!("error to subscribe");
+                            break;
+                        }
+                    }
                 }
+                (_, _) => {}
             };
         }
         a.abort();
+        // if error {
+        //     return Err(Arc::try_unwrap(service).unwrap().into_inner());
+        // }
         Ok(Arc::try_unwrap(service).unwrap().into_inner())
     }
 
@@ -304,7 +397,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     }
 
     // handle a new received log
-    async fn handle_log(&mut self, log: Log, sender: &Sender<Option<U64>>) -> Result<LogIterating> {
+    async fn handle_log(
+        &mut self,
+        log: Log,
+        sender: &Sender<TaskActivity>,
+    ) -> Result<LogIterating> {
         let meta = LogMeta::from(&log);
         let result = ExactlyEvents::decode_log(&RawLog {
             topics: log.topics,
@@ -350,7 +447,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     meta.transaction_index.as_u64() as i128,
                     meta.log_index.as_u128() as i128,
                 );
-                sender.send(log.block_number).await?;
+                sender
+                    .send(TaskActivity::BlockUpdated(log.block_number))
+                    .await?;
                 return Ok(LogIterating::UpdateFilters);
             }
 
@@ -506,7 +605,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     meta.transaction_index.as_u64() as i128,
                     meta.log_index.as_u128() as i128,
                 );
-                sender.send(log.block_number).await?;
+                sender
+                    .send(TaskActivity::BlockUpdated(log.block_number))
+                    .await?;
                 return Ok(LogIterating::UpdateFilters);
             }
 
@@ -566,8 +667,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 println!("Event not handled - {:?}", event);
             }
         }
-
-        sender.send(log.block_number).await?;
+        println!("send 0");
+        sender
+            .send(TaskActivity::BlockUpdated(log.block_number))
+            .await?;
+        println!("send 1");
         Ok(LogIterating::NextLog)
     }
 

@@ -216,10 +216,6 @@ impl Account {
         data.is_collateral = false;
     }
 
-    pub fn data(&self) -> &HashMap<Address, AccountPosition> {
-        &self.positions
-    }
-
     pub fn address(&self) -> H160 {
         self.address
     }
