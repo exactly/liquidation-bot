@@ -30,13 +30,17 @@ pub struct FixedLender<M, S> {
     pub penalty_rate: U256,
     pub adjust_factor: U256,
     pub decimals: u8,
-    pub smart_pool_assets: U256,
-    pub total_shares: U256,
+    pub floating_assets: U256,
+    pub floating_deposit_shares: U256,
+    pub floating_debt: U256,
+    pub floating_borrow_shares: U256,
+    pub floating_utilization: U256,
+    pub last_floating_debt_update: U256,
     pub max_future_pools: u8,
     pub fixed_pools: HashMap<u32, FixedPool>,
     pub smart_pool_fee_rate: U256,
-    pub smart_pool_earnings_accumulator: U256,
-    pub last_accumulated_earnings_accrual: U256,
+    pub earnings_accumulator: U256,
+    pub last_accumulator_accrual: U256,
     pub accumulated_earnings_smooth_factor: u128,
     pub price_feed: Address,
     pub listed: bool,
@@ -58,13 +62,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
             penalty_rate: Default::default(),
             adjust_factor: Default::default(),
             decimals: Default::default(),
-            smart_pool_assets: Default::default(),
-            total_shares: Default::default(),
+            floating_assets: Default::default(),
+            floating_deposit_shares: Default::default(),
+            floating_debt: Default::default(),
+            floating_borrow_shares: Default::default(),
+            floating_utilization: Default::default(),
+            last_floating_debt_update: Default::default(),
             max_future_pools: Default::default(),
             fixed_pools: Default::default(),
             smart_pool_fee_rate: Default::default(),
-            smart_pool_earnings_accumulator: Default::default(),
-            last_accumulated_earnings_accrual: Default::default(),
+            earnings_accumulator: Default::default(),
+            last_accumulator_accrual: Default::default(),
             accumulated_earnings_smooth_factor: Default::default(),
             price_feed: Default::default(),
             listed: Default::default(),
@@ -105,15 +113,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
             }
         }
         // println!("---------------");
-        self.smart_pool_assets
-            + smart_pool_earnings
-            + self.smart_pool_accumulated_earnings(timestamp)
+        self.floating_assets + smart_pool_earnings + self.smart_pool_accumulated_earnings(timestamp)
     }
 
     pub fn smart_pool_accumulated_earnings(&self, timestamp: U256) -> U256 {
-        let elapsed = timestamp - self.last_accumulated_earnings_accrual;
+        let elapsed = timestamp - self.last_accumulator_accrual;
         if elapsed > U256::zero() {
-            self.smart_pool_earnings_accumulator * elapsed
+            self.earnings_accumulator * elapsed
                 / (elapsed
                     + (U256::from(self.accumulated_earnings_smooth_factor)
                         * (INTERVAL * self.max_future_pools as u32)

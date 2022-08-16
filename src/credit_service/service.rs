@@ -473,46 +473,34 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             }
 
             ExactlyEvents::TransferFilter(data) => {
-                if data.from != data.to
-                    && (data.from == Address::zero() || data.to == Address::zero())
-                {
-                    // let market = self
-                    //     .markets
-                    //     .entry(meta.address)
-                    //     .or_insert_with_key(|key| FixedLender::new(*key));
+                if data.from != Address::zero() && data.to != Address::zero() {
+                    self.borrowers
+                        .entry(data.to)
+                        .or_insert_with_key(|key| Account::new(*key, &self.markets))
+                        .positions
+                        .entry(meta.address)
+                        .or_default()
+                        .floating_deposit_shares += data.amount;
+                    self.borrowers
+                        .get_mut(&data.from)
+                        .unwrap()
+                        .positions
+                        .get_mut(&meta.address)
+                        .unwrap()
+                        .floating_deposit_shares -= data.amount;
                 }
             }
             ExactlyEvents::DepositFilter(data) => {
-                println!("number of borrowers - 0: {:#?}", self.borrowers.len());
                 self.borrowers
                     .entry(data.owner)
                     .or_insert_with(|| Account::new(data.owner, &self.markets))
                     .deposit(&data, &meta.address);
-                println!("number of borrowers - 1: {:#?}", self.borrowers.len());
-                if data.owner
-                    == Address::from_str("0x9ca61a949242ea4cd131f11f7ccd9b63148654ea").unwrap()
-                {
-                    if let Some(borrower) = self.borrowers.get(&data.owner) {
-                        println!(">>>> borrower positions: {:#?}", borrower.positions);
-                    } else {
-                        println!(">>>> no such borrower");
-                    }
-                }
             }
             ExactlyEvents::WithdrawFilter(data) => {
                 self.borrowers
                     .entry(data.owner)
                     .or_insert_with(|| Account::new(data.owner, &self.markets))
                     .withdraw(&data, &meta.address);
-                if data.owner
-                    == Address::from_str("0x9ca61a949242ea4cd131f11f7ccd9b63148654ea").unwrap()
-                {
-                    if let Some(borrower) = self.borrowers.get(&data.owner) {
-                        println!(">>>> borrower positions: {:#?}", borrower.positions);
-                    } else {
-                        println!(">>>> no such borrower");
-                    }
-                }
             }
             ExactlyEvents::DepositAtMaturityFilter(data) => {
                 self.borrowers
@@ -639,9 +627,20 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     .markets
                     .entry(meta.address)
                     .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
-                market.total_shares = data.floating_deposit_shares;
-                market.smart_pool_assets = data.floating_assets;
-                market.smart_pool_earnings_accumulator = data.earnings_accumulator;
+                market.floating_deposit_shares = data.floating_deposit_shares;
+                market.floating_assets = data.floating_assets;
+                market.earnings_accumulator = data.earnings_accumulator;
+                market.floating_debt = data.floating_debt;
+                market.floating_borrow_shares = data.floating_borrow_shares;
+            }
+
+            ExactlyEvents::FloatingDebtUpdateFilter(data) => {
+                let market = self
+                    .markets
+                    .entry(meta.address)
+                    .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
+                market.floating_utilization = data.utilization;
+                market.last_floating_debt_update = data.timestamp;
             }
 
             ExactlyEvents::AccumulatorAccrualFilter(data) => {
@@ -649,7 +648,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     .markets
                     .entry(meta.address)
                     .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
-                market.last_accumulated_earnings_accrual = data.timestamp;
+                market.last_accumulator_accrual = data.timestamp;
             }
 
             ExactlyEvents::FixedEarningsUpdateFilter(data) => {
@@ -718,7 +717,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     .liquidate(
                         *address,
                         borrower.seizable_collateral().unwrap(),
-                        borrower.address(),
+                        borrower.address,
                         U256::MAX,
                         Address::zero(),
                         0,
@@ -794,11 +793,16 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let mut multicall =
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                         .await?;
+                const FIELDS: usize = 8;
                 for market in self.markets.values() {
                     multicall.add_call(market.contract.floating_assets());
                     multicall.add_call(market.contract.last_accumulator_accrual());
                     multicall.add_call(market.contract.earnings_accumulator());
                     multicall.add_call(market.contract.earnings_accumulator_smooth_factor());
+                    multicall.add_call(market.contract.floating_debt());
+                    multicall.add_call(market.contract.total_floating_borrow_shares());
+                    multicall.add_call(market.contract.last_floating_debt_update());
+                    multicall.add_call(market.contract.floating_utilization());
                 }
                 let responses = multicall.block(block).call_raw().await?;
                 for (i, market) in self.markets.values().enumerate() {
@@ -808,29 +812,57 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         "floating_assets",
                         "",
                         previewer_market.market,
-                        responses[i * 4].clone().into_uint().unwrap(),
-                        market.smart_pool_assets
+                        responses[i * FIELDS].clone().into_uint().unwrap(),
+                        market.floating_assets
                     );
                     success &= compare!(
                         "last_accumulator_accrual",
                         "",
                         previewer_market.market,
-                        responses[i * 4 + 1].clone().into_uint().unwrap(),
-                        market.last_accumulated_earnings_accrual
+                        responses[i * FIELDS + 1].clone().into_uint().unwrap(),
+                        market.last_accumulator_accrual
                     );
                     success &= compare!(
                         "earnings_accumulator",
                         "",
                         previewer_market.market,
-                        responses[i * 4 + 2].clone().into_uint().unwrap(),
-                        market.smart_pool_earnings_accumulator
+                        responses[i * FIELDS + 2].clone().into_uint().unwrap(),
+                        market.earnings_accumulator
                     );
                     success &= compare!(
                         "earnings_accumulator_smooth_factor",
                         "",
                         previewer_market.market,
-                        responses[i * 4 + 3].clone().into_uint().unwrap(),
+                        responses[i * FIELDS + 3].clone().into_uint().unwrap(),
                         U256::from(market.accumulated_earnings_smooth_factor)
+                    );
+                    success &= compare!(
+                        "floating_debt",
+                        "",
+                        previewer_market.market,
+                        responses[i * FIELDS + 4].clone().into_uint().unwrap(),
+                        U256::from(market.floating_debt)
+                    );
+                    success &= compare!(
+                        "total_floating_borrow_shares",
+                        "",
+                        previewer_market.market,
+                        responses[i * FIELDS + 5].clone().into_uint().unwrap(),
+                        U256::from(market.floating_borrow_shares)
+                    );
+                    success &= compare!(
+                        "last_floating_debt_update",
+                        "",
+                        previewer_market.market,
+                        responses[i * FIELDS + 6].clone().into_uint().unwrap(),
+                        U256::from(market.last_floating_debt_update)
+                    );
+                    success &= compare!(
+                        "floating_utilization",
+                        "",
+                        previewer_market.market,
+                        responses[i * FIELDS + 7].clone().into_uint().unwrap(),
+                        U256::from(market.floating_utilization)
                     );
                     success &= compare!(
                         "max_future_pools",
@@ -849,9 +881,35 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 }
             }
             compare_markets = false;
-            // for previewer_market in previewer_account {
-            //     let market = &self.markets[&previewer_market.market];
-            // }
+            for market_account in previewer_account.values() {
+                let account = &self.borrowers[address].positions[&market_account.market];
+                // let market = &self.markets[&market_account.market];
+                success &= compare!(
+                    "floating_deposit_shares",
+                    address,
+                    market_account.market,
+                    market_account.floating_deposit_shares,
+                    account.floating_deposit_shares
+                );
+                for fixed_deposit in &market_account.fixed_deposit_positions {
+                    success &= compare!(
+                        format!("fixed_deposit_positions[{}]", fixed_deposit.maturity),
+                        address,
+                        market_account.market,
+                        fixed_deposit.position.principal + fixed_deposit.position.fee,
+                        account.fixed_deposit_positions[&fixed_deposit.maturity.as_u32()]
+                    );
+                }
+                for fixed_borrow in &market_account.fixed_borrow_positions {
+                    success &= compare!(
+                        format!("fixed_borrow_positions[{}]", fixed_borrow.maturity),
+                        address,
+                        market_account.market,
+                        fixed_borrow.position.principal + fixed_borrow.position.fee,
+                        account.fixed_borrow_positions[&fixed_borrow.maturity.as_u32()]
+                    );
+                }
+            }
         }
         if !success {
             panic!("compare accounts error");
@@ -1150,7 +1208,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 collateral += current_collateral;
             }
             let mut current_debt = U256::zero();
-            for (maturity, borrowed) in position.maturity_borrow_positions.iter() {
+            for (maturity, borrowed) in position.fixed_borrow_positions.iter() {
                 current_debt += *borrowed;
                 if U256::from(*maturity) < timestamp {
                     current_debt +=

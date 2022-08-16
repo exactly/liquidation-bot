@@ -12,12 +12,12 @@ use crate::credit_service::{
     AccumulatorAccrualFilter, AdjustFactorSetFilter, ApprovalFilter, BackupFeeRateSetFilter,
     BorrowAtMaturityFilter, BorrowFilter, DampSpeedSetFilter, DepositAtMaturityFilter,
     DepositFilter, EarningsAccumulatorSmoothFactorSetFilter, FixedEarningsUpdateFilter,
-    FixedParametersSetFilter, FloatingDebtUpdateFilter, InterestRateModelSetFilter,
-    LiquidateFilter, LiquidationIncentiveSetFilter, MarketEnteredFilter, MarketExitedFilter,
-    MarketListedFilter, MarketUpdateFilter, MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter,
-    PenaltyRateSetFilter, PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter,
-    ReserveFactorSetFilter, SeizeFilter, TransferFilter, TreasurySetFilter, UnpausedFilter,
-    WithdrawAtMaturityFilter, WithdrawFilter,
+    FixedParametersSetFilter, FloatingDebtUpdateFilter, FloatingParametersSetFilter,
+    InterestRateModelSetFilter, LiquidateFilter, LiquidationIncentiveSetFilter,
+    MarketEnteredFilter, MarketExitedFilter, MarketListedFilter, MarketUpdateFilter,
+    MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter, PenaltyRateSetFilter,
+    PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter, ReserveFactorSetFilter, SeizeFilter,
+    TransferFilter, TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 use aggregator_mod::NewTransmissionFilter;
 
@@ -47,6 +47,7 @@ pub enum ExactlyEvents {
     FloatingDebtUpdateFilter(FloatingDebtUpdateFilter),
     BorrowFilter(BorrowFilter),
     RepayFilter(RepayFilter),
+    BackupFeeRateSetFilter(BackupFeeRateSetFilter),
 
     // Auditor events
     MarketListedFilter(MarketListedFilter),
@@ -67,7 +68,7 @@ pub enum ExactlyEvents {
 
     // InterestRateModel events
     FixedParametersSetFilter(FixedParametersSetFilter),
-    BackupFeeRateSetFilter(BackupFeeRateSetFilter),
+    FloatingParametersSetFilter(FloatingParametersSetFilter),
 
     // ExactlyOracle events
     PriceFeedSetFilter(PriceFeedSetFilter),
@@ -156,6 +157,9 @@ impl EthLogDecode for ExactlyEvents {
         if let Ok(decoded) = RepayFilter::decode_log(log) {
             return Ok(ExactlyEvents::RepayFilter(decoded));
         }
+        if let Ok(decoded) = BackupFeeRateSetFilter::decode_log(log) {
+            return Ok(ExactlyEvents::BackupFeeRateSetFilter(decoded));
+        }
 
         // Auditor events
         if let Ok(decoded) = MarketListedFilter::decode_log(log) {
@@ -204,8 +208,8 @@ impl EthLogDecode for ExactlyEvents {
         if let Ok(decoded) = FixedParametersSetFilter::decode_log(log) {
             return Ok(ExactlyEvents::FixedParametersSetFilter(decoded));
         }
-        if let Ok(decoded) = BackupFeeRateSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::BackupFeeRateSetFilter(decoded));
+        if let Ok(decoded) = FloatingParametersSetFilter::decode_log(log) {
+            return Ok(ExactlyEvents::FloatingParametersSetFilter(decoded));
         }
 
         // ExactlyOracle events
