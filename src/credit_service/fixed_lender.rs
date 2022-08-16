@@ -26,6 +26,7 @@ pub struct FixedPool {
 
 pub struct FixedLender<M, S> {
     pub contract: Market<SignerMiddleware<M, S>>,
+    pub interest_rate_model: Address,
     pub oracle_price: U256,
     pub penalty_rate: U256,
     pub adjust_factor: U256,
@@ -41,9 +42,13 @@ pub struct FixedLender<M, S> {
     pub smart_pool_fee_rate: U256,
     pub earnings_accumulator: U256,
     pub last_accumulator_accrual: U256,
-    pub accumulated_earnings_smooth_factor: u128,
+    pub earnings_accumulator_smooth_factor: u128,
     pub price_feed: Address,
     pub listed: bool,
+    pub floating_full_utilization: u128,
+    pub floating_a: u128,
+    pub floating_b: i128,
+    pub floating_max_utilization: u128,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Eq for FixedLender<M, S> {}
@@ -58,6 +63,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
     pub fn new(address: Address, client: &Arc<SignerMiddleware<M, S>>) -> Self {
         Self {
             contract: Market::new(address, Arc::clone(client)),
+            interest_rate_model: Default::default(),
             oracle_price: Default::default(),
             penalty_rate: Default::default(),
             adjust_factor: Default::default(),
@@ -73,9 +79,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
             smart_pool_fee_rate: Default::default(),
             earnings_accumulator: Default::default(),
             last_accumulator_accrual: Default::default(),
-            accumulated_earnings_smooth_factor: Default::default(),
+            earnings_accumulator_smooth_factor: Default::default(),
             price_feed: Default::default(),
             listed: Default::default(),
+            floating_full_utilization: Default::default(),
+            floating_a: Default::default(),
+            floating_b: Default::default(),
+            floating_max_utilization: Default::default(),
         }
     }
 
@@ -121,7 +131,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
         if elapsed > U256::zero() {
             self.earnings_accumulator * elapsed
                 / (elapsed
-                    + (U256::from(self.accumulated_earnings_smooth_factor)
+                    + (U256::from(self.earnings_accumulator_smooth_factor)
                         * (INTERVAL * self.max_future_pools as u32)
                         / U256::exp10(18)))
         } else {

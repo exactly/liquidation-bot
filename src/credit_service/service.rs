@@ -1,6 +1,8 @@
 use crate::bindings::ExactlyEvents;
 use crate::config::Config;
-use crate::credit_service::{Account, AggregatorProxy, Auditor, FixedLender, Market};
+use crate::credit_service::{
+    Account, AggregatorProxy, Auditor, FixedLender, InterestRateModel, Market,
+};
 use ethers::abi::Tokenizable;
 use ethers::prelude::signer::SignerMiddlewareError;
 use ethers::prelude::{
@@ -18,7 +20,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::Mutex;
-use tokio::time;
+use tokio::{time, try_join};
 use tokio_stream::StreamExt;
 
 use super::{ExactlyOracle, Liquidator, MarketAccount, Previewer};
@@ -131,15 +133,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         }
 
         let mut contracts_to_listen = HashMap::new();
-        markets.keys().for_each(|address| {
-            contracts_to_listen.insert(
-                ContractKey {
-                    address: *address,
-                    kind: ContractKeyKind::Market,
-                },
-                *address,
-            );
-        });
 
         contracts_to_listen.insert(
             ContractKey {
@@ -147,16 +140,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 kind: ContractKeyKind::Auditor,
             },
             (*auditor).address(),
-        );
-
-        let interest_rate_model_address =
-            Address::from_str("0xeC00E4A3f1c170E57f0261632c139f8330BAfbA3")?;
-        contracts_to_listen.insert(
-            ContractKey {
-                address: interest_rate_model_address,
-                kind: ContractKeyKind::InterestRateModel,
-            },
-            interest_rate_model_address,
         );
 
         Ok(CreditService {
@@ -457,7 +440,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 self.markets
                     .entry(meta.address)
                     .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
-                    .accumulated_earnings_smooth_factor = data.earnings_accumulator_smooth_factor;
+                    .earnings_accumulator_smooth_factor = data.earnings_accumulator_smooth_factor;
             }
 
             ExactlyEvents::MarketListedFilter(data) => {
@@ -468,8 +451,87 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 market.decimals = data.decimals;
                 market.smart_pool_fee_rate = self.sp_fee_rate;
                 market.listed = true;
+                market.interest_rate_model = market.contract.interest_rate_model().call().await?;
+                let max_future_pools = market.contract.max_future_pools();
+                let earnings_accumulator_smooth_factor =
+                    market.contract.earnings_accumulator_smooth_factor();
+                let interest_rate_model = market.contract.interest_rate_model();
+                let penalty_rate = market.contract.penalty_rate();
+                let (
+                    max_future_pools,
+                    earnings_accumulator_smooth_factor,
+                    interest_rate_model,
+                    penalty_rate,
+                ): (u8, u128, Address, U256) = try_join!(
+                    max_future_pools.call(),
+                    earnings_accumulator_smooth_factor.call(),
+                    interest_rate_model.call(),
+                    penalty_rate.call(),
+                )?;
+                market.max_future_pools = max_future_pools;
+                market.earnings_accumulator_smooth_factor = earnings_accumulator_smooth_factor;
+                market.interest_rate_model = interest_rate_model;
+                market.penalty_rate = penalty_rate;
+                let irm =
+                    InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
+                let floating_full_utilization = irm.floating_full_utilization();
+                let floating_curve = irm.floating_curve();
+                let (floating_full_utilization, (floating_a, floating_b, floating_max_utilization)): (u128, (u128, i128, u128)) =
+                    try_join!(floating_full_utilization.call(), floating_curve.call())?;
+                market.floating_full_utilization = floating_full_utilization;
+                market.floating_a = floating_a;
+                market.floating_b = floating_b;
+                market.floating_max_utilization = floating_max_utilization;
+                self.contracts_to_listen.insert(
+                    ContractKey {
+                        address: data.market,
+                        kind: ContractKeyKind::InterestRateModel,
+                    },
+                    market.interest_rate_model,
+                );
+                self.contracts_to_listen.insert(
+                    ContractKey {
+                        address: data.market,
+                        kind: ContractKeyKind::Market,
+                    },
+                    data.market,
+                );
                 market.approve_asset(&self.client).await?;
                 self.update_prices(meta.block_number).await?;
+                self.last_sync = (
+                    meta.block_number,
+                    meta.transaction_index.as_u64() as i128,
+                    meta.log_index.as_u128() as i128,
+                );
+                return Ok(LogIterating::UpdateFilters);
+            }
+
+            ExactlyEvents::InterestRateModelSetFilter(data) => {
+                let mut market = self.markets.get_mut(&meta.address).unwrap();
+                market.interest_rate_model = data.interest_rate_model;
+                let irm =
+                    InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
+                let floating_full_utilization = irm.floating_full_utilization();
+                let floating_curve = irm.floating_curve();
+                let (floating_full_utilization, (floating_a, floating_b, floating_max_utilization)): (u128, (u128, i128, u128)) =
+                    try_join!(floating_full_utilization.call(), floating_curve.call())?;
+                market.floating_full_utilization = floating_full_utilization;
+                market.floating_a = floating_a;
+                market.floating_b = floating_b;
+                market.floating_max_utilization = floating_max_utilization;
+                *self
+                    .contracts_to_listen
+                    .get_mut(&ContractKey {
+                        address: meta.address,
+                        kind: ContractKeyKind::InterestRateModel,
+                    })
+                    .unwrap() = market.interest_rate_model;
+                self.last_sync = (
+                    meta.block_number,
+                    meta.transaction_index.as_u64() as i128,
+                    meta.log_index.as_u128() as i128,
+                );
+                return Ok(LogIterating::UpdateFilters);
             }
 
             ExactlyEvents::TransferFilter(data) => {
@@ -834,7 +896,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         "",
                         previewer_market.market,
                         responses[i * FIELDS + 3].clone().into_uint().unwrap(),
-                        U256::from(market.accumulated_earnings_smooth_factor)
+                        U256::from(market.earnings_accumulator_smooth_factor)
                     );
                     success &= compare!(
                         "floating_debt",
