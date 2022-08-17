@@ -174,7 +174,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     where
         <M as Middleware>::Provider: PubsubClient,
     {
-        const PAGE_SIZE: u64 = 10000;
+        const PAGE_SIZE: u64 = 5000;
         let service = Arc::new(Mutex::new(self));
         let (debounce_tx, mut debounce_rx) = mpsc::channel(10);
         let me = Arc::clone(&service);
@@ -242,6 +242,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         (None, Some(logs))
                     } else {
                         a.abort();
+                        println!(">>> Error getting logs: {:?}", result);
                         break 'filter;
                     }
                 } else {
@@ -802,7 +803,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         block: U64,
     ) -> HashMap<Address, HashMap<Address, MarketAccount>> {
         let mut skip: usize = 0;
-        let batch = 1_000;
+        let batch = 100;
         let mut positions = HashMap::<Address, HashMap<Address, MarketAccount>>::new();
 
         while skip < self.borrowers.len() {
@@ -939,6 +940,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         previewer_market.market,
                         previewer_market.total_floating_deposit_assets,
                         market.total_assets(timestamp)
+                    );
+                    success &= compare!(
+                        "total_floating_borrow_assets",
+                        "",
+                        previewer_market.market,
+                        previewer_market.total_floating_borrow_assets,
+                        market.total_floating_borrow_assets(timestamp)
                     );
                 }
             }

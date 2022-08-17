@@ -1,18 +1,18 @@
 use ethers::types::{I256, U256};
 
 pub trait FixedPointMath {
-    const WAD: u128;
-    fn mul_div_down(&self, y: &Self, denominator: &Self) -> Self;
-    fn mul_div_up(&self, y: &Self, denominator: &Self) -> Self;
-    fn mul_wad_down(&self, y: &Self) -> Self;
-    fn mul_wad_up(&self, y: &Self) -> Self;
-    fn div_wad_down(&self, y: &Self) -> Self;
-    fn div_wad_up(&self, y: &Self) -> Self;
+    fn mul_div_down(&self, y: Self, denominator: Self) -> Self;
+    fn mul_div_up(&self, y: Self, denominator: Self) -> Self;
+    fn mul_wad_down(&self, y: Self) -> Self;
+    fn mul_wad_up(&self, y: Self) -> Self;
+    fn div_wad_down(&self, y: Self) -> Self;
+    fn div_wad_up(&self, y: Self) -> Self;
     fn ln_wad(&self) -> I256;
+    fn wad() -> Self;
 }
 
 #[inline(always)]
-fn lt(x: &U256, y: &U256) -> U256 {
+fn lt(x: U256, y: U256) -> U256 {
     if x < y {
         U256::from(1u32)
     } else {
@@ -20,25 +20,28 @@ fn lt(x: &U256, y: &U256) -> U256 {
     }
 }
 
-fn log2(x: &U256) -> U256 {
+fn log2(x: U256) -> U256 {
     let mut r;
-    r = lt(&U256::from(0xffffffffffffffffffffffffffffffffu128), x) << 7u32;
-    r = r | (lt(&U256::from(0xffffffffffffffffu128), &(x >> r)) << 6u32);
-    r = r | (lt(&U256::from(0xffffffffu128), &(x >> r)) << 5u32);
-    r = r | (lt(&U256::from(0xffffu128), &(x >> r)) << 4u32);
-    r = r | (lt(&U256::from(0xffu128), &(x >> r)) << 3u32);
-    r = r | (lt(&U256::from(0xfu128), &(x >> r)) << 2u32);
-    r = r | (lt(&U256::from(0x3u128), &(x >> r)) << 1u32);
-    r = r | lt(&U256::from(0x1u128), &(x >> r));
+    r = lt(U256::from(0xffffffffffffffffffffffffffffffffu128), x) << 7u32;
+    r = r | (lt(U256::from(0xffffffffffffffffu128), x >> r) << 6u32);
+    r = r | (lt(U256::from(0xffffffffu128), x >> r) << 5u32);
+    r = r | (lt(U256::from(0xffffu128), x >> r) << 4u32);
+    r = r | (lt(U256::from(0xffu128), x >> r) << 3u32);
+    r = r | (lt(U256::from(0xfu128), x >> r) << 2u32);
+    r = r | (lt(U256::from(0x3u128), x >> r) << 1u32);
+    r = r | lt(U256::from(0x1u128), x >> r);
     r
 }
 
 impl FixedPointMath for U256 {
-    const WAD: u128 = 1_000_000_000_000_000_000;
+    #[inline(always)]
+    fn wad() -> Self {
+        Self::exp10(18)
+    }
 
     fn ln_wad(&self) -> I256 {
         let mut x = *self;
-        let k = I256::from_raw(log2(&x)) - I256::from(96u32);
+        let k = I256::from_raw(log2(x)) - I256::from(96u32);
         x <<= (I256::from(159u32) - k).into_raw();
         let x = I256::from_raw(x >> 159u32);
 
@@ -83,27 +86,27 @@ impl FixedPointMath for U256 {
         r
     }
 
-    fn mul_wad_down(&self, y: &Self) -> Self {
-        self.mul_div_down(y, &U256::from(Self::WAD))
+    fn mul_wad_down(&self, y: Self) -> Self {
+        self.mul_div_down(y, Self::wad())
     }
 
-    fn mul_wad_up(&self, y: &Self) -> Self {
-        self.mul_div_up(y, &U256::from(Self::WAD))
+    fn mul_wad_up(&self, y: Self) -> Self {
+        self.mul_div_up(y, Self::wad())
     }
 
-    fn div_wad_down(&self, y: &Self) -> Self {
-        self.mul_div_down(&U256::from(Self::WAD), y)
+    fn div_wad_down(&self, y: Self) -> Self {
+        self.mul_div_down(Self::wad(), y)
     }
 
-    fn div_wad_up(&self, y: &Self) -> Self {
-        self.mul_div_up(&U256::from(Self::WAD), y)
+    fn div_wad_up(&self, y: Self) -> Self {
+        self.mul_div_up(Self::wad(), y)
     }
 
-    fn mul_div_down(&self, y: &Self, denominator: &Self) -> Self {
+    fn mul_div_down(&self, y: Self, denominator: Self) -> Self {
         let z = self * y;
         z / denominator
     }
-    fn mul_div_up(&self, y: &Self, denominator: &Self) -> Self {
+    fn mul_div_up(&self, y: Self, denominator: Self) -> Self {
         let z = self * y;
         (z - U256::from(1u32)) / denominator + U256::from(1u32)
     }
@@ -127,18 +130,18 @@ mod tests {
     #[test]
     fn test_log_2() {
         let a = U256::from(1024u32);
-        assert_eq!(fixed_point_math::log2(&a), U256::from(10u32));
+        assert_eq!(fixed_point_math::log2(a), U256::from(10u32));
     }
 
     #[test]
     fn test_mul_div_up() {
         let a: U256 = U256::from(5u32);
-        let r1 = a.mul_div_up(&U256::from(2u32), &U256::from(6u32));
-        let r2 = a.mul_div_up(&U256::from(2u32), &U256::from(5u32));
+        let r1 = a.mul_div_up(U256::from(2u32), U256::from(6u32));
+        let r2 = a.mul_div_up(U256::from(2u32), U256::from(5u32));
         assert_eq!(r1, U256::from(2u32));
         assert_eq!(r2, U256::from(2u32));
-        let r5 = U256::mul_div_up(&U256::from(4u32), &U256::from(5u32), &U256::from(3u32));
-        let r6 = U256::mul_div_up(&U256::from(4u32), &U256::from(5u32), &U256::from(10u32));
+        let r5 = U256::mul_div_up(&U256::from(4u32), U256::from(5u32), U256::from(3u32));
+        let r6 = U256::mul_div_up(&U256::from(4u32), U256::from(5u32), U256::from(10u32));
         assert_eq!(r5, U256::from(7u32));
         assert_eq!(r6, U256::from(2u32));
     }
@@ -146,12 +149,12 @@ mod tests {
     #[test]
     fn test_mul_div_down() {
         let a: U256 = U256::from(5u32);
-        let r1 = a.mul_div_down(&U256::from(2u32), &U256::from(6u32));
-        let r2 = a.mul_div_down(&U256::from(2u32), &U256::from(5u32));
+        let r1 = a.mul_div_down(U256::from(2u32), U256::from(6u32));
+        let r2 = a.mul_div_down(U256::from(2u32), U256::from(5u32));
         assert_eq!(r1, U256::from(1u32));
         assert_eq!(r2, U256::from(2u32));
-        let r5 = U256::mul_div_down(&U256::from(4u32), &U256::from(5u32), &U256::from(3u32));
-        let r6 = U256::mul_div_down(&U256::from(4u32), &U256::from(5u32), &U256::from(10u32));
+        let r5 = U256::mul_div_down(&U256::from(4u32), U256::from(5u32), U256::from(3u32));
+        let r6 = U256::mul_div_down(&U256::from(4u32), U256::from(5u32), U256::from(10u32));
         assert_eq!(r5, U256::from(6u32));
         assert_eq!(r6, U256::from(2u32));
     }

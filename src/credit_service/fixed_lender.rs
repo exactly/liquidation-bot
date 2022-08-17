@@ -4,9 +4,12 @@ use std::sync::Arc;
 use ethers::abi::Address;
 use ethers::prelude::{abigen, Middleware, Signer, SignerMiddleware, U256};
 
+use ethers::types::I256;
 use eyre::Result;
 
 use super::Market;
+
+use crate::fixed_point_math::FixedPointMath;
 
 const INTERVAL: u32 = 4 * 7 * 86_400;
 
@@ -123,19 +126,58 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
             }
         }
         // println!("---------------");
-        self.floating_assets + smart_pool_earnings + self.smart_pool_accumulated_earnings(timestamp)
+        self.floating_assets + smart_pool_earnings + self.accumulated_earnings(timestamp)
     }
 
-    pub fn smart_pool_accumulated_earnings(&self, timestamp: U256) -> U256 {
+    pub fn accumulated_earnings(&self, timestamp: U256) -> U256 {
         let elapsed = timestamp - self.last_accumulator_accrual;
         if elapsed > U256::zero() {
-            self.earnings_accumulator * elapsed
-                / (elapsed
-                    + (U256::from(self.earnings_accumulator_smooth_factor)
-                        * (INTERVAL * self.max_future_pools as u32)
-                        / U256::exp10(18)))
+            self.earnings_accumulator.mul_div_down(
+                elapsed,
+                elapsed
+                    + U256::from(self.earnings_accumulator_smooth_factor)
+                        .mul_wad_down(U256::from(INTERVAL * self.max_future_pools as u32)),
+            )
         } else {
             U256::zero()
         }
+    }
+
+    fn floating_borrow_rate(&self, utilization_before: U256, utilization_after: U256) -> U256 {
+        let r = if utilization_after - utilization_before < U256::exp10(8) * 25u32 {
+            U256::from(self.floating_a)
+                .div_wad_down(U256::from(self.floating_max_utilization) - utilization_before)
+        } else {
+            U256::from(self.floating_a).mul_div_down(
+                (U256::from(self.floating_max_utilization) - utilization_before)
+                    .div_wad_down(U256::from(self.floating_max_utilization) - utilization_after)
+                    .ln_wad()
+                    .into_raw(),
+                utilization_after - utilization_before,
+            )
+        };
+        (I256::from_raw(r) + I256::from(self.floating_b)).into_raw()
+    }
+
+    pub fn total_floating_borrow_assets(&self, timestamp: U256) -> U256 {
+        let new_floating_utilization = if self.floating_assets > U256::zero() {
+            self.floating_debt.div_wad_down(
+                self.floating_assets
+                    .div_wad_up(U256::from(self.floating_full_utilization)),
+            )
+        } else {
+            U256::zero()
+        };
+        let new_debt = self.floating_debt.mul_wad_down(
+            self.floating_borrow_rate(
+                U256::min(self.floating_utilization, new_floating_utilization),
+                U256::max(self.floating_utilization, new_floating_utilization),
+            )
+            .mul_div_down(
+                timestamp - self.last_floating_debt_update,
+                U256::from(365 * 24 * 60 * 60),
+            ),
+        );
+        self.floating_debt + new_debt
     }
 }
