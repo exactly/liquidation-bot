@@ -10,6 +10,7 @@ use crate::credit_service::CreditService;
 mod bindings;
 mod config;
 mod credit_service;
+mod fixed_point_math;
 
 async fn create_client(
     config: &Config,
