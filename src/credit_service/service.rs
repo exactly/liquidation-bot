@@ -75,6 +75,7 @@ pub struct CreditService<M, S> {
     sp_fee_rate: U256,
     accounts: HashMap<Address, Account>,
     contracts_to_listen: HashMap<ContractKey, Address>,
+    comparison_enabled: bool,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for CreditService<M, S> {
@@ -151,6 +152,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             sp_fee_rate: U256::zero(),
             accounts: HashMap::new(),
             contracts_to_listen,
+            comparison_enabled: config.comparison_enabled,
         })
     }
 
@@ -216,7 +218,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             let client;
             let result = {
                 let service_unlocked = service.lock().await;
-                println!("update filter: {:#?}", service_unlocked.contracts_to_listen);
                 client = Arc::clone(&service_unlocked.client);
                 if latest_block.is_zero() {
                     latest_block = client
@@ -750,7 +751,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             // self.update_prices(block_number).await?;
         }
 
-        self.compare_accounts(block_number, to_timestamp).await?;
+        if self.comparison_enabled {
+            println!("comparison_enabled");
+            self.compare_accounts(block_number, to_timestamp).await?;
+        } else {
+            println!("not comparison_enabled");
+        }
 
         let mut liquidations: HashMap<Address, Account> = HashMap::new();
         let mut liquidations_counter = 0;

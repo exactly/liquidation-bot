@@ -1,5 +1,7 @@
 extern crate dotenv;
-use ethers::prelude::{Address, MnemonicBuilder, Wallet, coins_bip39::English, k256::ecdsa::SigningKey};
+use ethers::prelude::{
+    coins_bip39::English, k256::ecdsa::SigningKey, Address, MnemonicBuilder, Wallet,
+};
 use std::env;
 use std::fmt::Debug;
 
@@ -17,6 +19,7 @@ pub struct Config {
     pub ampq_router_key: String,
     pub etherscan: String,
     pub liquidator_enabled: bool,
+    pub comparison_enabled: bool,
 }
 
 impl Default for Config {
@@ -36,6 +39,10 @@ impl Default for Config {
         let ampq_router_key = env::var("CLOUDAMQP_ROUTER").unwrap_or("".into());
         let terminator_address = Address::zero();
         let terminator_flash_address = Address::zero();
+        let comparison_enabled: bool = env::var("COMPARISON_ENABLED")
+            .unwrap_or("parse".into())
+            .parse::<bool>()
+            .unwrap_or(false);
 
         let (chain_id_name, eth_provider_rpc, etherscan) = match chain_id {
             1 => (
@@ -78,6 +85,7 @@ impl Default for Config {
             terminator_flash_address,
             etherscan: etherscan.into(),
             liquidator_enabled,
+            comparison_enabled,
         }
     }
 }
