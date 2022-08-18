@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::Mutex;
-use tokio::{time, try_join};
+use tokio::time;
 use tokio_stream::StreamExt;
 
 use super::{ExactlyOracle, Liquidator, MarketAccount, Previewer};
@@ -452,33 +452,33 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 market.decimals = data.decimals;
                 market.smart_pool_fee_rate = self.sp_fee_rate;
                 market.listed = true;
-                market.interest_rate_model = market.contract.interest_rate_model().call().await?;
-                let max_future_pools = market.contract.max_future_pools();
-                let earnings_accumulator_smooth_factor =
-                    market.contract.earnings_accumulator_smooth_factor();
-                let interest_rate_model = market.contract.interest_rate_model();
-                let penalty_rate = market.contract.penalty_rate();
+                let mut multicall =
+                    Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
+                        .await
+                        .unwrap();
+                multicall.add_call(market.contract.max_future_pools());
+                multicall.add_call(market.contract.earnings_accumulator_smooth_factor());
+                multicall.add_call(market.contract.interest_rate_model());
+                multicall.add_call(market.contract.penalty_rate());
+                multicall = multicall.block(meta.block_number);
                 let (
                     max_future_pools,
                     earnings_accumulator_smooth_factor,
                     interest_rate_model,
                     penalty_rate,
-                ): (u8, u128, Address, U256) = try_join!(
-                    max_future_pools.call(),
-                    earnings_accumulator_smooth_factor.call(),
-                    interest_rate_model.call(),
-                    penalty_rate.call(),
-                )?;
+                ) = multicall.call().await?;
                 market.max_future_pools = max_future_pools;
                 market.earnings_accumulator_smooth_factor = earnings_accumulator_smooth_factor;
                 market.interest_rate_model = interest_rate_model;
                 market.penalty_rate = penalty_rate;
+
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
-                let floating_full_utilization = irm.floating_full_utilization();
-                let floating_curve = irm.floating_curve();
-                let (floating_full_utilization, (floating_a, floating_b, floating_max_utilization)): (u128, (u128, i128, u128)) =
-                    try_join!(floating_full_utilization.call(), floating_curve.call())?;
+                multicall.clear_calls();
+                multicall.add_call(irm.floating_full_utilization());
+                multicall.add_call(irm.floating_curve());
+                let (floating_full_utilization, (floating_a, floating_b, floating_max_utilization)) =
+                    multicall.block(meta.block_number).call().await?;
                 market.floating_full_utilization = floating_full_utilization;
                 market.floating_a = floating_a;
                 market.floating_b = floating_b;
@@ -512,10 +512,15 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 market.interest_rate_model = data.interest_rate_model;
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
-                let floating_full_utilization = irm.floating_full_utilization();
-                let floating_curve = irm.floating_curve();
-                let (floating_full_utilization, (floating_a, floating_b, floating_max_utilization)): (u128, (u128, i128, u128)) =
-                    try_join!(floating_full_utilization.call(), floating_curve.call())?;
+                let mut multicall =
+                    Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
+                        .await
+                        .unwrap();
+                multicall.add_call(irm.floating_full_utilization());
+                multicall.add_call(irm.floating_curve());
+
+                let (floating_full_utilization, (floating_a, floating_b, floating_max_utilization)) =
+                    multicall.block(meta.block_number).call().await?;
                 market.floating_full_utilization = floating_full_utilization;
                 market.floating_a = floating_a;
                 market.floating_b = floating_b;
