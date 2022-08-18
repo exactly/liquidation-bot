@@ -71,7 +71,7 @@ impl Debug for Account {
         write!(
             f,
             "\n==============
-\tBorrower               {:?}
+\tAccount                {:?}
 \tTotal Collateral       {:?}
 \tTotal Debt             {:?}
 \tSeizable Collateral    {:?}
@@ -104,7 +104,7 @@ impl Account {
         }
     }
 
-    /// Get the borrower's debt.
+    /// Get the account's debt.
     #[must_use]
     pub fn debt(&self) -> U256 {
         if let Some(debt) = self.debt {
@@ -114,13 +114,13 @@ impl Account {
         }
     }
 
-    /// Get the borrower's seizable collateral.
+    /// Get the account's seizable collateral.
     #[must_use]
     pub fn seizable_collateral(&self) -> Option<Address> {
         self.seizable_collateral
     }
 
-    /// Get the borrower's fixed lender to liquidate.
+    /// Get the account's fixed lender to liquidate.
     #[must_use]
     pub fn fixed_lender_to_liquidate(&self) -> Option<H160> {
         self.fixed_lender_to_liquidate

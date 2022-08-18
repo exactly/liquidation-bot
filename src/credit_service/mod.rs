@@ -1,9 +1,9 @@
-pub mod borrower;
+pub mod account;
 // pub mod credit_manager;
 pub mod market;
 pub mod service;
 
-pub use borrower::*;
+pub use account::*;
 // pub use credit_manager::CreditManager;
 pub use market::Market;
 pub use service::CreditService;

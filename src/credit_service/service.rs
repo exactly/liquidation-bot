@@ -73,7 +73,7 @@ pub struct CreditService<M, S> {
     liquidator: Liquidator<SignerMiddleware<M, S>>,
     markets: HashMap<Address, Market<M, S>>,
     sp_fee_rate: U256,
-    borrowers: HashMap<Address, Account>,
+    accounts: HashMap<Address, Account>,
     contracts_to_listen: HashMap<ContractKey, Address>,
 }
 
@@ -149,7 +149,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             liquidator,
             markets,
             sp_fee_rate: U256::zero(),
-            borrowers: HashMap::new(),
+            accounts: HashMap::new(),
             contracts_to_listen,
         })
     }
@@ -536,14 +536,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
             ExactlyEvents::TransferFilter(data) => {
                 if data.from != Address::zero() && data.to != Address::zero() {
-                    self.borrowers
+                    self.accounts
                         .entry(data.to)
                         .or_insert_with_key(|key| Account::new(*key, &self.markets))
                         .positions
                         .entry(meta.address)
                         .or_default()
                         .floating_deposit_shares += data.amount;
-                    self.borrowers
+                    self.accounts
                         .get_mut(&data.from)
                         .unwrap()
                         .positions
@@ -553,49 +553,49 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 }
             }
             ExactlyEvents::DepositFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.owner)
                     .or_insert_with(|| Account::new(data.owner, &self.markets))
                     .deposit(&data, &meta.address);
             }
             ExactlyEvents::WithdrawFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.owner)
                     .or_insert_with(|| Account::new(data.owner, &self.markets))
                     .withdraw(&data, &meta.address);
             }
             ExactlyEvents::DepositAtMaturityFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.owner)
                     .or_insert_with(|| Account::new(data.owner, &self.markets))
                     .deposit_at_maturity(&data, &meta.address);
             }
             ExactlyEvents::WithdrawAtMaturityFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.owner)
                     .or_insert_with(|| Account::new(data.owner, &self.markets))
                     .withdraw_at_maturity(data, &meta.address);
             }
             ExactlyEvents::BorrowAtMaturityFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.borrower)
                     .or_insert_with(|| Account::new(data.borrower, &self.markets))
                     .borrow_at_maturity(&data, &meta.address);
             }
             ExactlyEvents::RepayAtMaturityFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.borrower)
                     .or_insert_with(|| Account::new(data.borrower, &self.markets))
                     .repay_at_maturity(&data, &meta.address);
             }
             ExactlyEvents::LiquidateFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.borrower)
                     .or_insert_with(|| Account::new(data.borrower, &self.markets))
                     .liquidate_borrow(data, &meta.address);
             }
             ExactlyEvents::SeizeFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.borrower)
                     .or_insert_with(|| Account::new(data.borrower, &self.markets))
                     .asset_seized(data, &meta.address);
@@ -616,14 +616,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             }
 
             ExactlyEvents::MarketEnteredFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.account)
                     .or_insert_with(|| Account::new(data.account, &self.markets))
                     .set_collateral(&data.market);
             }
 
             ExactlyEvents::MarketExitedFilter(data) => {
-                self.borrowers
+                self.accounts
                     .entry(data.account)
                     .or_insert_with(|| Account::new(data.account, &self.markets))
                     .unset_collateral(&data.market);
@@ -754,18 +754,18 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
         let mut liquidations: HashMap<Address, Account> = HashMap::new();
         let mut liquidations_counter = 0;
-        for (address, borrower) in self.borrowers.iter_mut() {
-            let hf = Self::compute_hf(&mut self.markets, borrower, to_timestamp);
+        for (address, account) in self.accounts.iter_mut() {
+            let hf = Self::compute_hf(&mut self.markets, account, to_timestamp);
             if let Ok(hf) = hf {
-                if hf < U256::exp10(18) && borrower.debt() != U256::zero() {
+                if hf < U256::exp10(18) && account.debt() != U256::zero() {
                     liquidations_counter += 1;
-                    liquidations.insert(address.clone(), borrower.clone());
+                    liquidations.insert(address.clone(), account.clone());
                 }
             }
         }
         println!(
             "accounts to check for liquidations {:#?}",
-            self.borrowers.len()
+            self.accounts.len()
         );
         println!("accounts to liquidate {:#?}", liquidations_counter);
         self.liquidate(&liquidations).await?;
@@ -773,9 +773,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     }
 
     async fn liquidate(&self, liquidations: &HashMap<Address, Account>) -> Result<()> {
-        for (_, borrower) in liquidations {
-            println!("Liquidating borrower {:?}", borrower);
-            if let Some(address) = &borrower.fixed_lender_to_liquidate() {
+        for (_, account) in liquidations {
+            println!("Liquidating account {:?}", account);
+            if let Some(address) = &account.fixed_lender_to_liquidate() {
                 println!("Liquidating on fixed lender {:?}", address);
 
                 // let contract =
@@ -785,8 +785,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     .liquidator
                     .liquidate(
                         *address,
-                        borrower.seizable_collateral().unwrap(),
-                        borrower.address,
+                        account.seizable_collateral().unwrap(),
+                        account.address,
                         U256::MAX,
                         Address::zero(),
                         0,
@@ -812,31 +812,31 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         let batch = 100;
         let mut positions = HashMap::<Address, HashMap<Address, MarketAccount>>::new();
 
-        while skip < self.borrowers.len() {
+        while skip < self.accounts.len() {
             let mut multicall =
                 Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                     .await
                     .unwrap();
             let mut inputs: Vec<Address> = Vec::new();
-            for borrower in self.borrowers.keys().skip(skip).take(batch) {
-                inputs.push(*borrower);
+            for account in self.accounts.keys().skip(skip).take(batch) {
+                inputs.push(*account);
 
-                multicall.add_call(self.previewer.exactly(*borrower));
+                multicall.add_call(self.previewer.exactly(*account));
             }
             let responses = multicall.block(block).call_raw().await.unwrap();
 
             let mut accounts_updated = inputs.iter();
             for response in responses {
                 let payload: Vec<MarketAccount> = Vec::from_token(response).unwrap();
-                let borrower = accounts_updated
+                let account = accounts_updated
                     .next()
-                    .expect("Number of self.borrowers and responses doesn't match");
+                    .expect("Number of self.accounts and responses doesn't match");
 
                 let mut markets = HashMap::new();
                 for market_account in payload {
                     markets.insert(market_account.market, market_account);
                 }
-                positions.insert(*borrower, markets);
+                positions.insert(*account, markets);
             }
 
             skip += batch;
@@ -846,7 +846,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
     async fn compare_accounts(&self, block: U64, timestamp: U256) -> Result<()> {
         let previewer_accounts = &self.multicall_previewer(U64::from(&block)).await;
-        let accounts = &self.borrowers;
+        let accounts = &self.accounts;
         let mut success = true;
         let mut compare_markets = true;
         for (address, previewer_account) in previewer_accounts {
@@ -958,7 +958,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             }
             compare_markets = false;
             for market_account in previewer_account.values() {
-                let account = &self.borrowers[address].positions[&market_account.market];
+                let account = &self.accounts[address].positions[&market_account.market];
                 // let market = &self.markets[&market_account.market];
                 success &= compare!(
                     "floating_deposit_shares",
@@ -1088,7 +1088,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         };
         if hf < U256::exp10(18) && account.debt() != U256::zero() {
             println!("==============");
-            println!("Borrower               {:?}", account.address);
+            println!("Account                {:?}", account.address);
             println!("Total Collateral       {:?}", collateral);
             println!("Total Debt             {:?}", debt);
             println!("Seizable Collateral    {:?}", seizable_collateral.1);
