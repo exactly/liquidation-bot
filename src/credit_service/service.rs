@@ -1,7 +1,8 @@
 use crate::bindings::ExactlyEvents;
 use crate::config::Config;
 use crate::credit_service::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
-use ethers::abi::Tokenizable;
+use crate::fixed_point_math::FixedPointMath;
+use ethers::abi::{Tokenizable, Tokenize};
 use ethers::prelude::signer::SignerMiddlewareError;
 use ethers::prelude::{
     abi::{Abi, RawLog},
@@ -558,6 +559,24 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         .floating_deposit_shares -= data.amount;
                 }
             }
+            ExactlyEvents::BorrowFilter(data) => {
+                self.accounts
+                    .entry(data.borrower)
+                    .or_insert_with_key(|key| Account::new(*key, &self.markets))
+                    .positions
+                    .entry(meta.address)
+                    .or_default()
+                    .floating_borrow_shares += data.shares;
+            }
+            ExactlyEvents::RepayFilter(data) => {
+                self.accounts
+                    .entry(data.borrower)
+                    .or_insert_with_key(|key| Account::new(*key, &self.markets))
+                    .positions
+                    .entry(meta.address)
+                    .or_default()
+                    .floating_borrow_shares -= data.shares;
+            }
             ExactlyEvents::DepositFilter(data) => {
                 self.accounts
                     .entry(data.owner)
@@ -767,7 +786,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         let mut liquidations_counter = 0;
         for (address, account) in self.accounts.iter_mut() {
             let hf = Self::compute_hf(&mut self.markets, account, to_timestamp);
-            if let Ok(hf) = hf {
+            if let Ok((hf, _, _)) = hf {
                 if hf < U256::exp10(18) && account.debt() != U256::zero() {
                     liquidations_counter += 1;
                     liquidations.insert(address.clone(), account.clone());
@@ -855,11 +874,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         positions
     }
 
-    async fn compare_accounts(&self, block: U64, timestamp: U256) -> Result<()> {
+    async fn compare_accounts(&mut self, block: U64, timestamp: U256) -> Result<()> {
         let previewer_accounts = &self.multicall_previewer(U64::from(&block)).await;
         let accounts = &self.accounts;
         let mut success = true;
         let mut compare_markets = true;
+        let mut accounts_with_borrows = Vec::<Address>::new();
         for (address, previewer_account) in previewer_accounts {
             let account = &accounts[address];
             success &= compare!(
@@ -873,7 +893,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let mut multicall =
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                         .await?;
-                const FIELDS: usize = 8;
+                const FIELDS: usize = 9;
                 for market in self.markets.values() {
                     multicall.add_call(market.contract.floating_assets());
                     multicall.add_call(market.contract.last_accumulator_accrual());
@@ -883,6 +903,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     multicall.add_call(market.contract.total_floating_borrow_shares());
                     multicall.add_call(market.contract.last_floating_debt_update());
                     multicall.add_call(market.contract.floating_utilization());
+                    multicall.add_call(market.contract.total_supply());
                 }
                 let responses = multicall.block(block).call_raw().await?;
                 for (i, market) in self.markets.values().enumerate() {
@@ -931,6 +952,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         U256::from(market.floating_borrow_shares)
                     );
                     success &= compare!(
+                        "total_floating_borrow_shares",
+                        "",
+                        previewer_market.market,
+                        responses[i * FIELDS + 5].clone().into_uint().unwrap(),
+                        U256::from(market.floating_borrow_shares)
+                    );
+                    success &= compare!(
                         "last_floating_debt_update",
                         "",
                         previewer_market.market,
@@ -943,6 +971,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         previewer_market.market,
                         responses[i * FIELDS + 7].clone().into_uint().unwrap(),
                         U256::from(market.floating_utilization)
+                    );
+                    success &= compare!(
+                        "total_floating_deposit_shares",
+                        "",
+                        previewer_market.market,
+                        responses[i * FIELDS + 8].clone().into_uint().unwrap(),
+                        U256::from(market.floating_deposit_shares)
                     );
                     success &= compare!(
                         "max_future_pools",
@@ -968,6 +1003,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 }
             }
             compare_markets = false;
+            let mut debt = U256::zero();
             for market_account in previewer_account.values() {
                 let account = &self.accounts[address].positions[&market_account.market];
                 // let market = &self.markets[&market_account.market];
@@ -978,6 +1014,16 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     market_account.floating_deposit_shares,
                     account.floating_deposit_shares
                 );
+                success &= compare!(
+                    "floating_borrow_shares",
+                    address,
+                    market_account.market,
+                    market_account.floating_borrow_shares,
+                    account.floating_borrow_shares
+                );
+                if market_account.floating_borrow_shares > U256::zero() {
+                    debt += market_account.floating_borrow_shares;
+                }
                 for fixed_deposit in &market_account.fixed_deposit_positions {
                     success &= compare!(
                         format!("fixed_deposit_positions[{}]", fixed_deposit.maturity),
@@ -995,7 +1041,73 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         fixed_borrow.position.principal + fixed_borrow.position.fee,
                         account.fixed_borrow_positions[&fixed_borrow.maturity.as_u32()]
                     );
+                    if (fixed_borrow.position.principal + fixed_borrow.position.fee) > U256::zero()
+                    {
+                        debt += fixed_borrow.position.principal + fixed_borrow.position.fee;
+                    }
                 }
+            }
+            if debt > U256::zero() {
+                accounts_with_borrows.push(*address);
+            }
+        }
+        let mut multicall =
+            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        for account in &accounts_with_borrows {
+            multicall.add_call(self.auditor.account_liquidity(
+                *account,
+                Address::zero(),
+                U256::zero(),
+            ));
+        }
+        let timestamp = self
+            .client
+            .provider()
+            .get_block(block)
+            .await?
+            .unwrap()
+            .timestamp;
+
+        let responses = multicall.block(block).call_raw().await?;
+
+        for (i, token) in responses.iter().enumerate() {
+            let v = token.clone().into_tokens();
+            let (adjusted_collateral, adjusted_debt): (U256, U256) = (
+                v[0].clone().into_uint().unwrap(),
+                v[1].clone().into_uint().unwrap(),
+            );
+            if adjusted_debt > U256::zero() {
+                let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
+                if let Some(account) = self.accounts.get_mut(&accounts_with_borrows[i]) {
+                    if let Ok((hf, collateral, debt)) =
+                        Self::compute_hf(&mut self.markets, account, timestamp)
+                    {
+                        success &= compare!(
+                            "health_factor",
+                            accounts_with_borrows[i],
+                            "",
+                            previewer_hf,
+                            hf
+                        );
+                        success &= compare!(
+                            "collateral",
+                            accounts_with_borrows[i],
+                            "",
+                            adjusted_collateral,
+                            collateral
+                        );
+                        success &=
+                            compare!("debt", accounts_with_borrows[i], "", adjusted_debt, debt);
+                    }
+                }
+            } else {
+                println!(
+                    "Account: {} collateral: {} debt: {}",
+                    accounts_with_borrows[i], adjusted_collateral, adjusted_debt
+                );
+                println!("***************");
+                println!("Account: {:#?}", self.accounts[&accounts_with_borrows[i]]);
+                println!("***************");
             }
         }
         if !success {
@@ -1055,7 +1167,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         markets: &mut HashMap<Address, Market<M, S>>,
         account: &mut Account,
         timestamp: U256,
-    ) -> Result<U256> {
+    ) -> Result<(U256, U256, U256)> {
         let mut collateral: U256 = U256::zero();
         let mut debt: U256 = U256::zero();
         let mut seizable_collateral: (U256, Option<Address>) = (U256::zero(), None);
@@ -1063,17 +1175,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         for (market_address, position) in account.positions.iter() {
             let market = markets.get_mut(market_address).unwrap();
             if position.is_collateral {
-                let current_collateral = position.floating_deposit_assets(market, timestamp)
-                    * market.oracle_price
-                    * U256::from(market.adjust_factor)
-                    / U256::exp10(market.decimals as usize)
-                    / U256::exp10(18);
+                let current_collateral = position
+                    .floating_deposit_assets(market, timestamp)
+                    .mul_div_down(market.oracle_price, U256::exp10(market.decimals as usize))
+                    .mul_wad_down(market.adjust_factor);
                 if current_collateral > seizable_collateral.0 {
                     seizable_collateral = (current_collateral, Some(*market_address));
                 }
                 collateral += current_collateral;
             }
             let mut current_debt = U256::zero();
+
             for (maturity, borrowed) in position.fixed_borrow_positions.iter() {
                 current_debt += *borrowed;
                 if U256::from(*maturity) < timestamp {
@@ -1081,9 +1193,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         (timestamp - U256::from(*maturity)) * U256::from(market.penalty_rate)
                 }
             }
-            debt += current_debt * market.oracle_price * U256::exp10(18)
-                / U256::from(market.adjust_factor)
-                / U256::exp10(market.decimals as usize);
+            current_debt += position.floating_borrow_assets(market, timestamp);
+            debt += current_debt
+                .mul_div_up(market.oracle_price, U256::exp10(market.decimals as usize))
+                .div_wad_up(market.adjust_factor);
             if current_debt > fixed_lender_to_liquidate.0 {
                 fixed_lender_to_liquidate = (current_debt, Some(*market_address));
             }
@@ -1108,6 +1221,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             println!("Debt on Fixed Lender $ {:?}", fixed_lender_to_liquidate.0);
             println!("Health factor {:?}\n", hf);
         }
-        Ok(hf)
+        Ok((hf, collateral, debt))
     }
 }

@@ -107,8 +107,13 @@ impl FixedPointMath for U256 {
         z / denominator
     }
     fn mul_div_up(&self, y: Self, denominator: Self) -> Self {
-        let z = self * y;
-        (z - U256::from(1u32)) / denominator + U256::from(1u32)
+        let z: I256 = I256::from_raw(self * y);
+        let m = if z.is_zero() {
+            I256::zero()
+        } else {
+            I256::from(1u32)
+        };
+        (m * ((z - I256::from(1u32)) / I256::from_raw(denominator) + I256::from(1u32))).into_raw()
     }
 }
 

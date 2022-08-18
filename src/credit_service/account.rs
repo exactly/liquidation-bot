@@ -10,11 +10,14 @@ use super::{
     RepayAtMaturityFilter, SeizeFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 
+use crate::fixed_point_math::FixedPointMath;
+
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct AccountPosition {
     pub fixed_deposit_positions: HashMap<u32, U256>,
     pub fixed_borrow_positions: HashMap<u32, U256>,
     pub floating_deposit_shares: U256,
+    pub floating_borrow_shares: U256,
     pub is_collateral: bool,
 }
 
@@ -24,9 +27,15 @@ impl Debug for AccountPosition {
         write!(
             f,
             "
-smart_pool_shares                  : {:?}
+\t\tfloating_deposit_shares                  : {:#?}
+\t\tfloating_borrow_shares                   : {:#?}
+\t\tfixed_deposit_positions                  : {:#?}
+\t\tfixed_borrow_positions                   : {:#?}
 ",
             self.floating_deposit_shares,
+            self.floating_borrow_shares,
+            self.fixed_deposit_positions,
+            self.fixed_borrow_positions,
         )
     }
 }
@@ -41,11 +50,28 @@ impl AccountPosition {
         market: &Market<M, S>,
         timestamp: U256,
     ) -> U256 {
-        if market.floating_deposit_shares > U256::zero() {
-            self.floating_deposit_shares * market.total_assets(timestamp)
-                / market.floating_deposit_shares
-        } else {
+        if market.floating_deposit_shares == U256::zero() {
             self.floating_deposit_shares
+        } else {
+            self.floating_deposit_shares.mul_div_down(
+                market.total_assets(timestamp),
+                market.floating_deposit_shares,
+            )
+        }
+    }
+
+    pub fn floating_borrow_assets<M: 'static + Middleware, S: 'static + Signer>(
+        &self,
+        market: &Market<M, S>,
+        timestamp: U256,
+    ) -> U256 {
+        if market.floating_borrow_shares == U256::zero() {
+            self.floating_borrow_shares
+        } else {
+            self.floating_borrow_shares.mul_div_up(
+                market.total_floating_borrow_assets(timestamp),
+                market.floating_borrow_shares,
+            )
         }
     }
 }
