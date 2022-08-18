@@ -7,8 +7,6 @@ use ethers::prelude::{abigen, Middleware, Signer, SignerMiddleware, U256};
 use ethers::types::I256;
 use eyre::Result;
 
-use super::Market;
-
 use crate::fixed_point_math::FixedPointMath;
 
 const INTERVAL: u32 = 4 * 7 * 86_400;
@@ -27,8 +25,8 @@ pub struct FixedPool {
     pub last_accrual: U256,
 }
 
-pub struct FixedLender<M, S> {
-    pub contract: Market<SignerMiddleware<M, S>>,
+pub struct Market<M, S> {
+    pub contract: crate::credit_service::market_mod::Market<SignerMiddleware<M, S>>,
     pub interest_rate_model: Address,
     pub oracle_price: U256,
     pub penalty_rate: U256,
@@ -54,18 +52,18 @@ pub struct FixedLender<M, S> {
     pub floating_max_utilization: u128,
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> Eq for FixedLender<M, S> {}
+impl<M: 'static + Middleware, S: 'static + Signer> Eq for Market<M, S> {}
 
-impl<M: 'static + Middleware, S: 'static + Signer> PartialEq for FixedLender<M, S> {
+impl<M: 'static + Middleware, S: 'static + Signer> PartialEq for Market<M, S> {
     fn eq(&self, other: &Self) -> bool {
         (*self.contract).address() == (*other.contract).address()
     }
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
+impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
     pub fn new(address: Address, client: &Arc<SignerMiddleware<M, S>>) -> Self {
         Self {
-            contract: Market::new(address, Arc::clone(client)),
+            contract: crate::credit_service::market_mod::Market::new(address, Arc::clone(client)),
             interest_rate_model: Default::default(),
             oracle_price: Default::default(),
             penalty_rate: Default::default(),

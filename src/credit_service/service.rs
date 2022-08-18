@@ -1,8 +1,6 @@
 use crate::bindings::ExactlyEvents;
 use crate::config::Config;
-use crate::credit_service::{
-    Account, AggregatorProxy, Auditor, FixedLender, InterestRateModel, Market,
-};
+use crate::credit_service::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
 use ethers::abi::Tokenizable;
 use ethers::prelude::signer::SignerMiddlewareError;
 use ethers::prelude::{
@@ -73,7 +71,7 @@ pub struct CreditService<M, S> {
     auditor: Auditor<SignerMiddleware<M, S>>,
     oracle: ExactlyOracle<SignerMiddleware<M, S>>,
     liquidator: Liquidator<SignerMiddleware<M, S>>,
-    markets: HashMap<Address, FixedLender<M, S>>,
+    markets: HashMap<Address, Market<M, S>>,
     sp_fee_rate: U256,
     borrowers: HashMap<Address, Account>,
     contracts_to_listen: HashMap<ContractKey, Address>,
@@ -124,12 +122,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             Self::get_contracts(Arc::clone(&client), &config).await;
 
         let auditor_markets = auditor.all_markets().call().await?;
-        let mut markets = HashMap::<Address, FixedLender<M, S>>::new();
+        let mut markets = HashMap::<Address, Market<M, S>>::new();
         for market in auditor_markets {
             println!("Adding market {:?}", market);
             markets
                 .entry(market)
-                .or_insert_with_key(|key| FixedLender::new(*key, &client));
+                .or_insert_with_key(|key| Market::new(*key, &client));
         }
 
         let mut contracts_to_listen = HashMap::new();
@@ -166,7 +164,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         self.liquidator = liquidator;
         for market in self.markets.values_mut() {
             let address = market.contract.address();
-            market.contract = Market::new(address, Arc::clone(&client));
+            market.contract =
+                crate::credit_service::market_mod::Market::new(address, Arc::clone(&client));
         }
     }
 
@@ -413,7 +412,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             ExactlyEvents::MaxFuturePoolsSetFilter(data) => {
                 self.markets
                     .entry(meta.address)
-                    .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key, &self.client))
                     .max_future_pools = data.max_future_pools.as_u32() as u8;
             }
 
@@ -440,7 +439,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             ExactlyEvents::EarningsAccumulatorSmoothFactorSetFilter(data) => {
                 self.markets
                     .entry(meta.address)
-                    .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key, &self.client))
                     .earnings_accumulator_smooth_factor = data.earnings_accumulator_smooth_factor;
             }
 
@@ -448,7 +447,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let mut market = self
                     .markets
                     .entry(data.market)
-                    .or_insert_with_key(|key| FixedLender::new(*key, &self.client));
+                    .or_insert_with_key(|key| Market::new(*key, &self.client));
                 market.decimals = data.decimals;
                 market.smart_pool_fee_rate = self.sp_fee_rate;
                 market.listed = true;
@@ -605,14 +604,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             ExactlyEvents::AdjustFactorSetFilter(data) => {
                 self.markets
                     .entry(data.market)
-                    .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key, &self.client))
                     .adjust_factor = data.adjust_factor;
             }
 
             ExactlyEvents::PenaltyRateSetFilter(data) => {
                 self.markets
                     .entry(meta.address)
-                    .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key, &self.client))
                     .penalty_rate = data.penalty_rate;
             }
 
@@ -648,7 +647,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     .or_insert(aggregator);
                 self.markets
                     .entry(data.market)
-                    .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key, &self.client))
                     .price_feed = aggregator;
                 self.update_prices(meta.block_number).await?;
                 self.last_sync = (
@@ -681,7 +680,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 );
                 self.markets
                     .entry(market)
-                    .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key, &self.client))
                     .oracle_price = data.current.into_raw() * U256::exp10(10);
             }
 
@@ -689,7 +688,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let market = self
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address, &self.client));
                 market.floating_deposit_shares = data.floating_deposit_shares;
                 market.floating_assets = data.floating_assets;
                 market.earnings_accumulator = data.earnings_accumulator;
@@ -701,7 +700,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let market = self
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address, &self.client));
                 market.floating_utilization = data.utilization;
                 market.last_floating_debt_update = data.timestamp;
             }
@@ -710,7 +709,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let market = self
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address, &self.client));
                 market.last_accumulator_accrual = data.timestamp;
             }
 
@@ -718,7 +717,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let market = self
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address, &self.client));
 
                 let pool = market.fixed_pools.entry(data.maturity).or_default();
                 pool.last_accrual = data.timestamp;
@@ -754,14 +753,21 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         self.compare_accounts(block_number, to_timestamp).await?;
 
         let mut liquidations: HashMap<Address, Account> = HashMap::new();
+        let mut liquidations_counter = 0;
         for (address, borrower) in self.borrowers.iter_mut() {
             let hf = Self::compute_hf(&mut self.markets, borrower, to_timestamp);
             if let Ok(hf) = hf {
                 if hf < U256::exp10(18) && borrower.debt() != U256::zero() {
+                    liquidations_counter += 1;
                     liquidations.insert(address.clone(), borrower.clone());
                 }
             }
         }
+        println!(
+            "accounts to check for liquidations {:#?}",
+            self.borrowers.len()
+        );
+        println!("accounts to liquidate {:#?}", liquidations_counter);
         self.liquidate(&liquidations).await?;
         Ok(())
     }
@@ -1035,7 +1041,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     }
 
     pub fn compute_hf(
-        markets: &mut HashMap<Address, FixedLender<M, S>>,
+        markets: &mut HashMap<Address, Market<M, S>>,
         account: &mut Account,
         timestamp: U256,
     ) -> Result<U256> {
@@ -1080,15 +1086,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         } else {
             U256::exp10(18) * collateral / debt
         };
-        println!("==============");
-        println!("Borrower               {:?}", account.address);
-        println!("Total Collateral       {:?}", collateral);
-        println!("Total Debt             {:?}", debt);
-        println!("Seizable Collateral    {:?}", seizable_collateral.1);
-        println!("Seizable Collateral  $ {:?}", seizable_collateral.0);
-        println!("Debt on Fixed Lender   {:?}", fixed_lender_to_liquidate.1);
-        println!("Debt on Fixed Lender $ {:?}", fixed_lender_to_liquidate.0);
-        println!("Health factor {:?}\n", hf);
+        if hf < U256::exp10(18) && account.debt() != U256::zero() {
+            println!("==============");
+            println!("Borrower               {:?}", account.address);
+            println!("Total Collateral       {:?}", collateral);
+            println!("Total Debt             {:?}", debt);
+            println!("Seizable Collateral    {:?}", seizable_collateral.1);
+            println!("Seizable Collateral  $ {:?}", seizable_collateral.0);
+            println!("Debt on Fixed Lender   {:?}", fixed_lender_to_liquidate.1);
+            println!("Debt on Fixed Lender $ {:?}", fixed_lender_to_liquidate.0);
+            println!("Health factor {:?}\n", hf);
+        }
         Ok(hf)
     }
 }

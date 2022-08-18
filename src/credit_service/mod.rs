@@ -1,11 +1,11 @@
 pub mod borrower;
 // pub mod credit_manager;
-pub mod fixed_lender;
+pub mod market;
 pub mod service;
 
 pub use borrower::*;
 // pub use credit_manager::CreditManager;
-pub use fixed_lender::FixedLender;
+pub use market::Market;
 pub use service::CreditService;
 
 use ethers::prelude::abigen;

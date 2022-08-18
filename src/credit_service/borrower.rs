@@ -6,7 +6,7 @@ use std::{
 };
 
 use super::{
-    BorrowAtMaturityFilter, DepositAtMaturityFilter, DepositFilter, FixedLender, LiquidateFilter,
+    BorrowAtMaturityFilter, DepositAtMaturityFilter, DepositFilter, LiquidateFilter, Market,
     RepayAtMaturityFilter, SeizeFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 
@@ -38,7 +38,7 @@ impl AccountPosition {
 
     pub fn floating_deposit_assets<M: 'static + Middleware, S: 'static + Signer>(
         &self,
-        market: &FixedLender<M, S>,
+        market: &Market<M, S>,
         timestamp: U256,
     ) -> U256 {
         if market.floating_deposit_shares > U256::zero() {
@@ -90,7 +90,7 @@ impl Debug for Account {
 impl Account {
     pub fn new<M: Middleware, S: Signer>(
         address: Address,
-        market_map: &HashMap<Address, FixedLender<M, S>>,
+        market_map: &HashMap<Address, Market<M, S>>,
     ) -> Self {
         let mut markets = HashMap::<Address, AccountPosition>::new();
         for address in market_map.keys() {
