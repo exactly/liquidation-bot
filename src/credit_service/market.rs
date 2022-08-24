@@ -50,6 +50,7 @@ pub struct Market<M, S> {
     pub floating_a: u128,
     pub floating_b: i128,
     pub floating_max_utilization: u128,
+    pub treasury_fee_rate: u128,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Eq for Market<M, S> {}
@@ -87,6 +88,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             floating_a: Default::default(),
             floating_b: Default::default(),
             floating_max_utilization: Default::default(),
+            treasury_fee_rate: Default::default(),
         }
     }
 
@@ -124,7 +126,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             }
         }
         // println!("---------------");
-        self.floating_assets + smart_pool_earnings + self.accumulated_earnings(timestamp)
+        self.floating_assets
+            + smart_pool_earnings
+            + self.accumulated_earnings(timestamp)
+            + (self.total_floating_borrow_assets(timestamp) - self.floating_debt)
+                .mul_wad_down(U256::exp10(18) - self.treasury_fee_rate)
     }
 
     pub fn accumulated_earnings(&self, timestamp: U256) -> U256 {

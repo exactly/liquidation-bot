@@ -461,17 +461,20 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 multicall.add_call(market.contract.earnings_accumulator_smooth_factor());
                 multicall.add_call(market.contract.interest_rate_model());
                 multicall.add_call(market.contract.penalty_rate());
+                multicall.add_call(market.contract.treasury_fee_rate());
                 multicall = multicall.block(meta.block_number);
                 let (
                     max_future_pools,
                     earnings_accumulator_smooth_factor,
                     interest_rate_model,
                     penalty_rate,
+                    treasury_fee_rate,
                 ) = multicall.call().await?;
                 market.max_future_pools = max_future_pools;
                 market.earnings_accumulator_smooth_factor = earnings_accumulator_smooth_factor;
                 market.interest_rate_model = interest_rate_model;
                 market.penalty_rate = penalty_rate;
+                market.treasury_fee_rate = treasury_fee_rate;
 
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
@@ -737,6 +740,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let pool = market.fixed_pools.entry(data.maturity).or_default();
                 pool.last_accrual = data.timestamp;
                 pool.unassigned_earnings = data.unassigned_earnings;
+            }
+
+            ExactlyEvents::TreasurySetFilter(data) => {
+                let market = self
+                    .markets
+                    .entry(meta.address)
+                    .or_insert_with_key(|address| Market::new(*address, &self.client));
+                market.treasury_fee_rate = data.treasury_fee_rate;
             }
 
             _ => {
