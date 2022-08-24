@@ -542,7 +542,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             }
 
             ExactlyEvents::TransferFilter(data) => {
-                if data.from != Address::zero() && data.to != Address::zero() {
+                if data.to != Address::zero() {
                     self.accounts
                         .entry(data.to)
                         .or_insert_with_key(|key| Account::new(*key, &self.markets))
@@ -550,6 +550,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         .entry(meta.address)
                         .or_default()
                         .floating_deposit_shares += data.amount;
+                }
+                if data.from != Address::zero() {
                     self.accounts
                         .get_mut(&data.from)
                         .unwrap()
@@ -576,18 +578,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     .entry(meta.address)
                     .or_default()
                     .floating_borrow_shares -= data.shares;
-            }
-            ExactlyEvents::DepositFilter(data) => {
-                self.accounts
-                    .entry(data.owner)
-                    .or_insert_with(|| Account::new(data.owner, &self.markets))
-                    .deposit(&data, &meta.address);
-            }
-            ExactlyEvents::WithdrawFilter(data) => {
-                self.accounts
-                    .entry(data.owner)
-                    .or_insert_with(|| Account::new(data.owner, &self.markets))
-                    .withdraw(&data, &meta.address);
             }
             ExactlyEvents::DepositAtMaturityFilter(data) => {
                 self.accounts

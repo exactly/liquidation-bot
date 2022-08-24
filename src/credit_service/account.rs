@@ -6,8 +6,8 @@ use std::{
 };
 
 use super::{
-    BorrowAtMaturityFilter, DepositAtMaturityFilter, DepositFilter, LiquidateFilter, Market,
-    RepayAtMaturityFilter, SeizeFilter, WithdrawAtMaturityFilter, WithdrawFilter,
+    BorrowAtMaturityFilter, DepositAtMaturityFilter, LiquidateFilter, Market,
+    RepayAtMaturityFilter, SeizeFilter, WithdrawAtMaturityFilter,
 };
 
 use crate::fixed_point_math::FixedPointMath;
@@ -150,21 +150,6 @@ impl Account {
     #[must_use]
     pub fn fixed_lender_to_liquidate(&self) -> Option<H160> {
         self.fixed_lender_to_liquidate
-    }
-
-    pub fn deposit(&mut self, deposit: &DepositFilter, market: &Address) {
-        println!("User deposited - {:#?} {:#?}", self.address, deposit.assets);
-        let data = self.positions.entry(*market).or_default();
-        data.floating_deposit_shares += deposit.shares;
-    }
-
-    pub fn withdraw(&mut self, withdraw: &WithdrawFilter, market: &Address) {
-        let data = self.positions.entry(*market).or_default();
-        println!(
-            "user {:#?}\nmarket {:#?}\n withdraw {:#?}",
-            self.address, market, withdraw.assets
-        );
-        data.floating_deposit_shares -= withdraw.shares;
     }
 
     pub fn deposit_at_maturity(&mut self, deposit: &DepositAtMaturityFilter, market: &Address) {
