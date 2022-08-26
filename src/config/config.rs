@@ -20,6 +20,7 @@ pub struct Config {
     pub etherscan: String,
     pub liquidator_enabled: bool,
     pub comparison_enabled: bool,
+    pub token_pairs: String,
 }
 
 impl Default for Config {
@@ -72,6 +73,8 @@ impl Default for Config {
             false
         };
 
+        let token_pairs = env::var("TOKEN_PAIRS").unwrap_or("".into());
+
         Config {
             chain_id,
             chain_id_name: chain_id_name.into(),
@@ -86,6 +89,7 @@ impl Default for Config {
             etherscan: etherscan.into(),
             liquidator_enabled,
             comparison_enabled,
+            token_pairs,
         }
     }
 }

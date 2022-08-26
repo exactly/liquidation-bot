@@ -12,12 +12,12 @@ use crate::credit_service::{
     AccumulatorAccrualFilter, AdjustFactorSetFilter, ApprovalFilter, BackupFeeRateSetFilter,
     BorrowAtMaturityFilter, BorrowFilter, DampSpeedSetFilter, DepositAtMaturityFilter,
     DepositFilter, EarningsAccumulatorSmoothFactorSetFilter, FixedEarningsUpdateFilter,
-    FixedParametersSetFilter, FloatingDebtUpdateFilter, FloatingParametersSetFilter,
-    InterestRateModelSetFilter, LiquidateFilter, LiquidationIncentiveSetFilter,
-    MarketEnteredFilter, MarketExitedFilter, MarketListedFilter, MarketUpdateFilter,
-    MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter, PenaltyRateSetFilter,
-    PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter, ReserveFactorSetFilter, SeizeFilter,
-    TransferFilter, TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
+    FloatingDebtUpdateFilter, InterestRateModelSetFilter, LiquidateFilter,
+    LiquidationIncentiveSetFilter, MarketEnteredFilter, MarketExitedFilter, MarketListedFilter,
+    MarketUpdateFilter, MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter,
+    PenaltyRateSetFilter, PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter,
+    ReserveFactorSetFilter, SeizeFilter, TransferFilter, TreasurySetFilter, UnpausedFilter,
+    WithdrawAtMaturityFilter, WithdrawFilter,
 };
 use aggregator_mod::NewTransmissionFilter;
 
@@ -65,10 +65,6 @@ pub enum ExactlyEvents {
     PenaltyRateSetFilter(PenaltyRateSetFilter),
     ReserveFactorSetFilter(ReserveFactorSetFilter),
     DampSpeedSetFilter(DampSpeedSetFilter),
-
-    // InterestRateModel events
-    FixedParametersSetFilter(FixedParametersSetFilter),
-    FloatingParametersSetFilter(FloatingParametersSetFilter),
 
     // ExactlyOracle events
     PriceFeedSetFilter(PriceFeedSetFilter),
@@ -202,14 +198,6 @@ impl EthLogDecode for ExactlyEvents {
         }
         if let Ok(decoded) = DampSpeedSetFilter::decode_log(log) {
             return Ok(ExactlyEvents::DampSpeedSetFilter(decoded));
-        }
-
-        // InterestRateModel events
-        if let Ok(decoded) = FixedParametersSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::FixedParametersSetFilter(decoded));
-        }
-        if let Ok(decoded) = FloatingParametersSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::FloatingParametersSetFilter(decoded));
         }
 
         // ExactlyOracle events

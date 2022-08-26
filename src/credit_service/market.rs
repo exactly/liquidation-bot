@@ -165,10 +165,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
 
     pub fn total_floating_borrow_assets(&self, timestamp: U256) -> U256 {
         let new_floating_utilization = if self.floating_assets > U256::zero() {
-            self.floating_debt.div_wad_down(
-                self.floating_assets
-                    .div_wad_up(U256::from(self.floating_full_utilization)),
-            )
+            self.floating_debt.div_wad_up(self.floating_assets)
         } else {
             U256::zero()
         };

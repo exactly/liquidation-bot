@@ -80,10 +80,6 @@ impl AccountPosition {
 pub struct Account {
     pub address: Address,
     pub positions: HashMap<Address, AccountPosition>,
-    pub debt: Option<U256>,
-    pub seizable_collateral: Option<Address>,
-    pub fixed_lender_to_liquidate: Option<Address>,
-    pub collateral: Option<U256>,
 }
 
 impl PartialEq for Account {
@@ -98,17 +94,8 @@ impl Debug for Account {
             f,
             "\n==============
 \tAccount                {:?}
-\tTotal Collateral       {:?}
-\tTotal Debt             {:?}
-\tSeizable Collateral    {:?}
-\tDebt on Fixed Lender   {:?}
 \tData\n{:?}\n",
-            self.address,
-            self.collateral,
-            self.debt,
-            self.seizable_collateral,
-            self.fixed_lender_to_liquidate,
-            self.positions
+            self.address, self.positions
         )
     }
 }
@@ -128,28 +115,6 @@ impl Account {
             positions: markets,
             ..Default::default()
         }
-    }
-
-    /// Get the account's debt.
-    #[must_use]
-    pub fn debt(&self) -> U256 {
-        if let Some(debt) = self.debt {
-            debt
-        } else {
-            U256::zero()
-        }
-    }
-
-    /// Get the account's seizable collateral.
-    #[must_use]
-    pub fn seizable_collateral(&self) -> Option<Address> {
-        self.seizable_collateral
-    }
-
-    /// Get the account's fixed lender to liquidate.
-    #[must_use]
-    pub fn fixed_lender_to_liquidate(&self) -> Option<H160> {
-        self.fixed_lender_to_liquidate
     }
 
     pub fn deposit_at_maturity(&mut self, deposit: &DepositAtMaturityFilter, market: &Address) {

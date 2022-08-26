@@ -11,7 +11,10 @@ use ethers::prelude::{
 };
 use ethers::prelude::{Log, PubsubClient};
 use eyre::Result;
+use serde::Deserialize;
 use serde_json::Value;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
@@ -28,7 +31,6 @@ use super::{ExactlyOracle, Liquidator, MarketAccount, Previewer};
 enum ContractKeyKind {
     Market,
     PriceFeed,
-    InterestRateModel,
     Oracle,
     Auditor,
 }
@@ -43,6 +45,19 @@ enum TaskActivity {
     StartCheckLiquidation,
     StopCheckLiquidation,
     BlockUpdated(Option<U64>),
+}
+
+#[derive(Default, Debug)]
+struct Repay {
+    pub price: U256,
+    pub decimals: u8,
+    pub seize_available: U256,
+    pub seizable_collateral: (U256, Option<Address>),
+    pub market_to_liquidate: (U256, Option<Address>),
+    pub total_collateral: U256,
+    pub adjusted_collateral: U256,
+    pub total_debt: U256,
+    pub adjusted_debt: U256,
 }
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
@@ -64,6 +79,12 @@ macro_rules! compare {
     };
 }
 
+#[derive(Default)]
+struct LiquidationIncentive {
+    pub liquidator: u128,
+    pub lenders: u128,
+}
+
 // #[derive(Debug)]
 pub struct CreditService<M, S> {
     client: Arc<SignerMiddleware<M, S>>,
@@ -77,6 +98,8 @@ pub struct CreditService<M, S> {
     accounts: HashMap<Address, Account>,
     contracts_to_listen: HashMap<ContractKey, Address>,
     comparison_enabled: bool,
+    liquidation_incentive: LiquidationIncentive,
+    token_pairs: HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for CreditService<M, S> {
@@ -142,6 +165,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             (*auditor).address(),
         );
 
+        let token_pairs = parse_token_pairs(&config.token_pairs);
+
         Ok(CreditService {
             client: Arc::clone(&client),
             last_sync: (U64::from(deployed_block), -1, -1),
@@ -154,6 +179,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             accounts: HashMap::new(),
             contracts_to_listen,
             comparison_enabled: config.comparison_enabled,
+            liquidation_incentive: Default::default(),
+            token_pairs,
         })
     }
 
@@ -183,24 +210,30 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         let a = tokio::spawn(async move {
             let mut block_number = None;
             let mut check_liquidations = false;
+            let mut liquidation_checked = false;
             loop {
-                match time::timeout(Duration::from_millis(2_000), debounce_rx.recv()).await {
+                let d = Duration::from_millis(2_000);
+                match time::timeout(d, debounce_rx.recv()).await {
                     Ok(Some(activity)) => match activity {
                         TaskActivity::StartCheckLiquidation => check_liquidations = true,
                         TaskActivity::StopCheckLiquidation => check_liquidations = false,
                         TaskActivity::BlockUpdated(block) => {
                             block_number = block;
                             println!("### just received log");
+                            liquidation_checked = false;
                         }
                     },
                     Ok(None) => {
                         println!("### end of stream");
                     }
                     Err(_) => {
-                        println!("### {:?}ms since network activity", 2_000);
-                        if check_liquidations {
+                        println!("### {:?}ms since network activity", d.as_millis());
+                        if check_liquidations && !liquidation_checked {
                             if let Some(block) = block_number {
-                                let _ = me.lock().await.check_liquidations(block).await;
+                                println!("### checking liquidations");
+                                let lock = me.lock().await.check_liquidations(block).await;
+                                liquidation_checked = true;
+                                drop(lock);
                             }
                         }
                     }
@@ -278,6 +311,19 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         first_block = last_block + 1u64;
                         getting_logs = false;
                     } else {
+                        // println!("comparing every {} blocks", PAGE_SIZE);
+                        // let to_timestamp = me
+                        //     .client
+                        //     .provider()
+                        //     .get_block(last_block)
+                        //     .await
+                        //     .unwrap()
+                        //     .unwrap()
+                        //     .timestamp;
+                        // me.compare_accounts(U64::from(last_block), to_timestamp)
+                        //     .await
+                        //     .unwrap();
+
                         first_block = last_block + 1u64;
                         last_block = if first_block + PAGE_SIZE > latest_block {
                             println!(">>> go to final block");
@@ -401,6 +447,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             "---->     Contract {:?} - {}",
             meta.address, meta.block_number
         );
+        // if meta.block_number >= 11276623u64.into() {
+        //     println!("------- event with block number 11276623");
+        //     sender.send(TaskActivity::StartCheckLiquidation).await?;
+        //     std::thread::sleep(Duration::from_secs(2));
+        //     return Ok(LogIterating::UpdateFilters);
+        // }
         if (
             meta.block_number,
             meta.transaction_index.as_u64() as i128,
@@ -409,6 +461,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         {
             return Ok(LogIterating::NextLog);
         }
+        self.last_sync = (
+            meta.block_number,
+            meta.transaction_index.as_u64() as i128,
+            meta.log_index.as_u128() as i128,
+        );
         println!("{:?}, {:?}", event, meta);
         match event {
             ExactlyEvents::MaxFuturePoolsSetFilter(data) => {
@@ -463,6 +520,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 multicall.add_call(market.contract.penalty_rate());
                 multicall.add_call(market.contract.treasury_fee_rate());
                 multicall = multicall.block(meta.block_number);
+                println!("Call multicall for market {}", market.contract.address());
                 let (
                     max_future_pools,
                     earnings_accumulator_smooth_factor,
@@ -479,21 +537,19 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
                 multicall.clear_calls();
-                multicall.add_call(irm.floating_full_utilization());
-                multicall.add_call(irm.floating_curve());
-                let (floating_full_utilization, (floating_a, floating_b, floating_max_utilization)) =
-                    multicall.block(meta.block_number).call().await?;
-                market.floating_full_utilization = floating_full_utilization;
-                market.floating_a = floating_a;
-                market.floating_b = floating_b;
-                market.floating_max_utilization = floating_max_utilization;
-                self.contracts_to_listen.insert(
-                    ContractKey {
-                        address: data.market,
-                        kind: ContractKeyKind::InterestRateModel,
-                    },
-                    market.interest_rate_model,
-                );
+                multicall.add_call(irm.floating_curve_a());
+                multicall.add_call(irm.floating_curve_b());
+                multicall.add_call(irm.floating_max_utilization());
+                println!("Call multicall for interest rate model {}", irm.address());
+                let result = multicall.block(meta.block_number).call().await;
+                if let Ok((floating_a, floating_b, floating_max_utilization)) = result {
+                    println!("success getting interest rate model data");
+                    market.floating_a = floating_a;
+                    market.floating_b = floating_b;
+                    market.floating_max_utilization = floating_max_utilization;
+                } else {
+                    println!("error getting interest rate model data");
+                }
                 self.contracts_to_listen.insert(
                     ContractKey {
                         address: data.market,
@@ -520,22 +576,19 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                         .await
                         .unwrap();
-                multicall.add_call(irm.floating_full_utilization());
-                multicall.add_call(irm.floating_curve());
 
-                let (floating_full_utilization, (floating_a, floating_b, floating_max_utilization)) =
-                    multicall.block(meta.block_number).call().await?;
-                market.floating_full_utilization = floating_full_utilization;
-                market.floating_a = floating_a;
-                market.floating_b = floating_b;
-                market.floating_max_utilization = floating_max_utilization;
-                *self
-                    .contracts_to_listen
-                    .get_mut(&ContractKey {
-                        address: meta.address,
-                        kind: ContractKeyKind::InterestRateModel,
-                    })
-                    .unwrap() = market.interest_rate_model;
+                multicall.add_call(irm.floating_curve_a());
+                multicall.add_call(irm.floating_curve_b());
+                multicall.add_call(irm.floating_max_utilization());
+                let result = multicall.block(meta.block_number).call().await;
+                if let Ok((floating_a, floating_b, floating_max_utilization)) = result {
+                    println!("success getting interest rate model data");
+                    market.floating_a = floating_a;
+                    market.floating_b = floating_b;
+                    market.floating_max_utilization = floating_max_utilization;
+                } else {
+                    println!("error getting interest rate model data");
+                }
                 self.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
@@ -750,6 +803,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 market.treasury_fee_rate = data.treasury_fee_rate;
             }
 
+            ExactlyEvents::LiquidationIncentiveSetFilter(data) => {
+                self.liquidation_incentive = LiquidationIncentive {
+                    liquidator: data.liquidation_incentive.0,
+                    lenders: data.liquidation_incentive.1,
+                }
+            }
+
             _ => {
                 println!("Event not handled - {:?}", event);
             }
@@ -762,7 +822,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         Ok(LogIterating::NextLog)
     }
 
-    async fn check_liquidations(&mut self, block_number: U64) -> Result<()> {
+    async fn check_liquidations(&self, block_number: U64) -> Result<()> {
         println!("check_liquidations");
         // let previewer_borrowers = self.multicall_previewer(U64::from(&to)).await;
         let to_timestamp = self
@@ -783,14 +843,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             println!("not comparison_enabled");
         }
 
-        let mut liquidations: HashMap<Address, Account> = HashMap::new();
+        let mut liquidations: HashMap<Address, (Account, Repay)> = HashMap::new();
         let mut liquidations_counter = 0;
-        for (address, account) in self.accounts.iter_mut() {
-            let hf = Self::compute_hf(&mut self.markets, account, to_timestamp);
-            if let Ok((hf, _, _)) = hf {
-                if hf < U256::exp10(18) && account.debt() != U256::zero() {
+        for (address, account) in self.accounts.iter() {
+            let hf = Self::compute_hf(&self.markets, account, to_timestamp);
+            if let Ok((hf, _, _, repay)) = hf {
+                if hf < U256::exp10(18) && repay.adjusted_debt != U256::zero() {
                     liquidations_counter += 1;
-                    liquidations.insert(address.clone(), account.clone());
+                    liquidations.insert(address.clone(), (account.clone(), repay));
                 }
             }
         }
@@ -803,32 +863,58 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         Ok(())
     }
 
-    async fn liquidate(&self, liquidations: &HashMap<Address, Account>) -> Result<()> {
-        for (_, account) in liquidations {
+    async fn liquidate(&self, liquidations: &HashMap<Address, (Account, Repay)>) -> Result<()> {
+        for (_, (account, repay)) in liquidations {
             println!("Liquidating account {:?}", account);
-            if let Some(address) = &account.fixed_lender_to_liquidate() {
+            // if account.address
+            //     != Address::from_str("0x279ab4aafeaad01ec6b0bc07957b387b1502248d").unwrap()
+            // {
+            //     continue;
+            // }
+            if let Some(address) = &repay.market_to_liquidate.1 {
                 println!("Liquidating on fixed lender {:?}", address);
 
                 // let contract =
                 //     Market::<SignerMiddleware<M, S>>::new(*address, Arc::clone(&&self.client));
+                let max_repay_assets =
+                    Self::max_repay_assets(repay, &self.liquidation_incentive, U256::MAX);
 
+                println!("max_repay_assets {:#?}", max_repay_assets);
+                let (flash_pair, flash_fee, swap_fee): (Address, u32, u32) = self.get_flash_pair(
+                    *address,
+                    repay.seizable_collateral.1.unwrap(),
+                    max_repay_assets,
+                );
+
+                // liquidate using liquidator contract
                 let func = self
                     .liquidator
                     .liquidate(
                         *address,
-                        account.seizable_collateral().unwrap(),
+                        repay.seizable_collateral.1.unwrap(),
                         account.address,
-                        U256::MAX,
-                        Address::zero(),
-                        0,
-                        0,
+                        max_repay_assets,
+                        flash_pair,
+                        flash_fee,
+                        swap_fee,
                     )
                     .gas(6_666_666);
+
+                // liquidate using market liquidate function
+                // let func = self.markets[address]
+                //     .contract
+                //     .liquidate(
+                //         account.address,
+                //         max_repay_assets,
+                //         repay.seizable_collateral.1.unwrap(),
+                //     )
+                //     .gas(6_666_666);
 
                 let tx = func.send().await;
                 println!("tx: {:?}", &tx);
                 let tx = tx?;
-                let receipt = tx.await?;
+                println!("waiting receipt");
+                let receipt = tx.confirmations(1).await?;
                 println!("Liquidation tx {:?}", receipt);
             }
         }
@@ -854,7 +940,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
                 multicall.add_call(self.previewer.exactly(*account));
             }
-            let responses = multicall.block(block).call_raw().await.unwrap();
+            let responses = multicall.block(block).call_raw().await;
+            if let Err(_) = responses {
+                println!("old previewer, no comparison will be made");
+                return positions;
+            }
+            let responses = responses.unwrap();
 
             let mut accounts_updated = inputs.iter();
             for response in responses {
@@ -875,12 +966,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         positions
     }
 
-    async fn compare_accounts(&mut self, block: U64, timestamp: U256) -> Result<()> {
+    async fn compare_accounts(&self, block: U64, timestamp: U256) -> Result<()> {
         let previewer_accounts = &self.multicall_previewer(U64::from(&block)).await;
         let accounts = &self.accounts;
         let mut success = true;
         let mut compare_markets = true;
         let mut accounts_with_borrows = Vec::<Address>::new();
+
+        if previewer_accounts.len() == 0 {
+            return Ok(());
+        };
+        println!("previewer on block {}", block);
         for (address, previewer_account) in previewer_accounts {
             let account = &accounts[address];
             success &= compare!(
@@ -1052,6 +1148,31 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 accounts_with_borrows.push(*address);
             }
         }
+
+        let previewer_incentive = self
+            .auditor
+            .liquidation_incentive()
+            .block(block)
+            .call()
+            .await
+            .unwrap();
+
+        success &= compare!(
+            "liquidation_incentive.liquidator",
+            "",
+            "",
+            previewer_incentive.0,
+            self.liquidation_incentive.liquidator
+        );
+
+        success &= compare!(
+            "liquidation_incentive.lenders",
+            "",
+            "",
+            previewer_incentive.1,
+            self.liquidation_incentive.lenders
+        );
+
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
         for account in &accounts_with_borrows {
@@ -1079,9 +1200,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             );
             if adjusted_debt > U256::zero() {
                 let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
-                if let Some(account) = self.accounts.get_mut(&accounts_with_borrows[i]) {
-                    if let Ok((hf, collateral, debt)) =
-                        Self::compute_hf(&mut self.markets, account, timestamp)
+                if let Some(account) = self.accounts.get(&accounts_with_borrows[i]) {
+                    if let Ok((hf, collateral, debt, _)) =
+                        Self::compute_hf(&self.markets, account, timestamp)
                     {
                         success &= compare!(
                             "health_factor",
@@ -1164,64 +1285,208 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         (contract, abi, block_number)
     }
 
-    pub fn compute_hf(
-        markets: &mut HashMap<Address, Market<M, S>>,
-        account: &mut Account,
+    fn compute_hf(
+        markets: &HashMap<Address, Market<M, S>>,
+        account: &Account,
         timestamp: U256,
-    ) -> Result<(U256, U256, U256)> {
-        let mut collateral: U256 = U256::zero();
-        let mut debt: U256 = U256::zero();
-        let mut seizable_collateral: (U256, Option<Address>) = (U256::zero(), None);
-        let mut fixed_lender_to_liquidate: (U256, Option<Address>) = (U256::zero(), None);
+    ) -> Result<(U256, U256, U256, Repay)> {
+        let mut total_collateral: U256 = U256::zero();
+        let mut adjusted_collateral: U256 = U256::zero();
+        let mut total_debt: U256 = U256::zero();
+        let mut adjusted_debt: U256 = U256::zero();
+        let mut repay = Repay::default();
         for (market_address, position) in account.positions.iter() {
-            let market = markets.get_mut(market_address).unwrap();
+            let market = markets.get(market_address).unwrap();
             if position.is_collateral {
-                let current_collateral = position
-                    .floating_deposit_assets(market, timestamp)
-                    .mul_div_down(market.oracle_price, U256::exp10(market.decimals as usize))
-                    .mul_wad_down(market.adjust_factor);
-                if current_collateral > seizable_collateral.0 {
-                    seizable_collateral = (current_collateral, Some(*market_address));
+                let current_collateral = position.floating_deposit_assets(market, timestamp);
+                let value = current_collateral
+                    .mul_div_down(market.oracle_price, U256::exp10(market.decimals as usize));
+                total_collateral += value;
+                adjusted_collateral += value.mul_wad_down(market.adjust_factor);
+                if value > repay.seizable_collateral.0 {
+                    repay.seize_available = value;
+                    repay.seizable_collateral = (value, Some(*market_address));
                 }
-                collateral += current_collateral;
             }
             let mut current_debt = U256::zero();
 
             for (maturity, borrowed) in position.fixed_borrow_positions.iter() {
                 current_debt += *borrowed;
                 if U256::from(*maturity) < timestamp {
-                    current_debt +=
-                        (timestamp - U256::from(*maturity)) * U256::from(market.penalty_rate)
+                    current_debt += borrowed.mul_wad_down(
+                        (timestamp - U256::from(*maturity)) * U256::from(market.penalty_rate),
+                    )
                 }
             }
             current_debt += position.floating_borrow_assets(market, timestamp);
-            debt += current_debt
-                .mul_div_up(market.oracle_price, U256::exp10(market.decimals as usize))
-                .div_wad_up(market.adjust_factor);
-            if current_debt > fixed_lender_to_liquidate.0 {
-                fixed_lender_to_liquidate = (current_debt, Some(*market_address));
+
+            let value =
+                current_debt.mul_div_up(market.oracle_price, U256::exp10(market.decimals as usize));
+            total_debt += value;
+            adjusted_debt += value.div_wad_up(market.adjust_factor);
+
+            if value > repay.market_to_liquidate.0 {
+                repay.price = market.oracle_price;
+                repay.decimals = market.decimals;
+                repay.market_to_liquidate = (value, Some(*market_address));
             }
         }
-        account.collateral = Some(collateral);
-        account.seizable_collateral = seizable_collateral.1;
-        account.fixed_lender_to_liquidate = fixed_lender_to_liquidate.1;
-        account.debt = Some(debt);
-        let hf = if debt == U256::zero() {
-            collateral
+        repay.total_collateral = total_collateral;
+        repay.adjusted_collateral = adjusted_collateral;
+        repay.total_debt = total_debt;
+        repay.adjusted_debt = adjusted_debt;
+        let hf = if adjusted_debt == U256::zero() {
+            adjusted_collateral
         } else {
-            U256::exp10(18) * collateral / debt
+            U256::exp10(18) * adjusted_collateral / adjusted_debt
         };
-        if hf < U256::exp10(18) && account.debt() != U256::zero() {
+        if hf < U256::exp10(18) && adjusted_debt != U256::zero() {
             println!("==============");
             println!("Account                {:?}", account.address);
-            println!("Total Collateral       {:?}", collateral);
-            println!("Total Debt             {:?}", debt);
-            println!("Seizable Collateral    {:?}", seizable_collateral.1);
-            println!("Seizable Collateral  $ {:?}", seizable_collateral.0);
-            println!("Debt on Fixed Lender   {:?}", fixed_lender_to_liquidate.1);
-            println!("Debt on Fixed Lender $ {:?}", fixed_lender_to_liquidate.0);
+            println!("Total Collateral   USD {:?}", total_collateral);
+            println!("Total Debt         USD {:?}", total_debt);
             println!("Health factor {:?}\n", hf);
         }
-        Ok((hf, collateral, debt))
+        Ok((hf, adjusted_collateral, adjusted_debt, repay))
+    }
+
+    fn max_repay_assets(
+        repay: &Repay,
+        liquidation_incentive: &LiquidationIncentive,
+        max_liquidator_assets: U256,
+    ) -> U256 {
+        println!("repay {:?}", repay);
+        let target_health = U256::exp10(16usize) * 125u32;
+        let adjusted_factor = repay
+            .adjusted_collateral
+            .div_wad_up(repay.total_collateral)
+            .mul_wad_up(repay.total_debt.div_wad_up(repay.adjusted_debt));
+        println!("adjusted_factor {:?}", adjusted_factor);
+        let close_factor =
+            (target_health - repay.adjusted_collateral.div_wad_up(repay.adjusted_debt)).div_wad_up(
+                target_health
+                    - adjusted_factor.mul_wad_down(
+                        U256::exp10(18)
+                            + liquidation_incentive.liquidator
+                            + liquidation_incentive.lenders,
+                    ),
+            );
+        println!("close_factor {:?}", close_factor);
+        U256::min(
+            U256::min(
+                repay
+                    .total_debt
+                    .mul_wad_up(U256::min(U256::exp10(18), close_factor)),
+                repay.seize_available.div_wad_up(
+                    U256::exp10(18)
+                        + liquidation_incentive.liquidator
+                        + liquidation_incentive.lenders,
+                ),
+            )
+            .mul_div_up(U256::exp10(repay.decimals as usize), repay.price),
+            if max_liquidator_assets
+                < U256::from_str("115792089237316195423570985008687907853269984665640564039457") //// U256::MAX / WAD
+                    .unwrap()
+            {
+                max_liquidator_assets.div_wad_down(U256::exp10(18) + liquidation_incentive.lenders)
+            } else {
+                max_liquidator_assets
+            },
+        )
+    }
+
+    fn get_flash_pair(
+        &self,
+        repay: Address,
+        collateral: Address,
+        _max_repay_assets: U256,
+    ) -> (Address, u32, u32) {
+        let tokens: HashSet<Address> = HashSet::new();
+        let mut lowest_fee = u32::MAX;
+        let mut pair_contract = Address::zero();
+        for token in tokens {
+            if token != collateral {
+                if let Some(pair) = self.token_pairs.get(&ordered_addresses(token, repay)) {
+                    if let Some(rate) = pair.peek() {
+                        if rate.0 < lowest_fee {
+                            lowest_fee = rate.0;
+                            pair_contract = token;
+                        }
+                    }
+                }
+            }
+        }
+        (pair_contract, lowest_fee, lowest_fee)
+    }
+}
+
+fn ordered_addresses(token0: Address, token1: Address) -> (Address, Address) {
+    if token0 < token1 {
+        (token0, token1)
+    } else {
+        (token1, token0)
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct TokenPair {
+    pub token0: String,
+    pub token1: String,
+    pub fee: u32,
+}
+
+fn parse_token_pairs(token_pairs: &str) -> HashMap<(Address, Address), BinaryHeap<Reverse<u32>>> {
+    let json_pairs: Vec<TokenPair> = serde_json::from_str(token_pairs).unwrap();
+    let mut pairs = HashMap::new();
+    for pair in json_pairs {
+        println!("pair {:?}", pair);
+        pairs
+            .entry(ordered_addresses(
+                Address::from_str(&pair.token0).unwrap(),
+                Address::from_str(&pair.token1).unwrap(),
+            ))
+            .or_insert(BinaryHeap::new())
+            .push(Reverse(pair.fee));
+    }
+    pairs
+}
+#[cfg(test)]
+mod services_test {
+
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
+
+    #[test]
+    fn test_parse_token_pairs() {
+        let tokens = r#"[{
+                            "token0": "0x0000000000000000000000000000000000000000", 
+                            "token1": "0x0000000000000000000000000000000000000001", 
+                            "fee": 3000
+                          },
+                          {
+                            "token0": "0x0000000000000000000000000000000000000000", 
+                            "token1": "0x0000000000000000000000000000000000000001", 
+                            "fee": 1000
+                          },
+                          {
+                            "token0": "0x0000000000000000000000000000000000000000", 
+                            "token1": "0x0000000000000000000000000000000000000001", 
+                            "fee": 2000
+                          }]"#;
+        let pairs = parse_token_pairs(tokens);
+        assert_eq!(
+            pairs
+                .get(
+                    &(ordered_addresses(
+                        Address::from_str(&"0x0000000000000000000000000000000000000001").unwrap(),
+                        Address::from_str(&"0x0000000000000000000000000000000000000000").unwrap()
+                    ))
+                )
+                .unwrap()
+                .peek()
+                .unwrap()
+                .0,
+            1000
+        );
     }
 }
