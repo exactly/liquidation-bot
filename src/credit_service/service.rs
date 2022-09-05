@@ -100,6 +100,7 @@ pub struct CreditService<M, S> {
     comparison_enabled: bool,
     liquidation_incentive: LiquidationIncentive,
     token_pairs: HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
+    tokens: HashSet<Address>,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for CreditService<M, S> {
@@ -154,7 +155,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 .entry(market)
                 .or_insert_with_key(|key| Market::new(*key, &client));
         }
-
         let mut contracts_to_listen = HashMap::new();
 
         contracts_to_listen.insert(
@@ -165,7 +165,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             (*auditor).address(),
         );
 
-        let token_pairs = parse_token_pairs(&config.token_pairs);
+        let (token_pairs, tokens) = parse_token_pairs(&config.token_pairs);
 
         Ok(CreditService {
             client: Arc::clone(&client),
@@ -181,6 +181,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             comparison_enabled: config.comparison_enabled,
             liquidation_incentive: Default::default(),
             token_pairs,
+            tokens,
         })
     }
 
@@ -519,6 +520,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 multicall.add_call(market.contract.interest_rate_model());
                 multicall.add_call(market.contract.penalty_rate());
                 multicall.add_call(market.contract.treasury_fee_rate());
+                multicall.add_call(market.contract.asset());
                 multicall = multicall.block(meta.block_number);
                 println!("Call multicall for market {}", market.contract.address());
                 let (
@@ -527,12 +529,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     interest_rate_model,
                     penalty_rate,
                     treasury_fee_rate,
+                    asset,
                 ) = multicall.call().await?;
                 market.max_future_pools = max_future_pools;
                 market.earnings_accumulator_smooth_factor = earnings_accumulator_smooth_factor;
                 market.interest_rate_model = interest_rate_model;
                 market.penalty_rate = penalty_rate;
                 market.treasury_fee_rate = treasury_fee_rate;
+                market.asset = asset;
 
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
@@ -872,19 +876,23 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             //     continue;
             // }
             if let Some(address) = &repay.market_to_liquidate.1 {
-                println!("Liquidating on fixed lender {:?}", address);
-
-                // let contract =
-                //     Market::<SignerMiddleware<M, S>>::new(*address, Arc::clone(&&self.client));
                 let max_repay_assets =
                     Self::max_repay_assets(repay, &self.liquidation_incentive, U256::MAX);
 
-                println!("max_repay_assets {:#?}", max_repay_assets);
                 let (flash_pair, flash_fee, swap_fee): (Address, u32, u32) = self.get_flash_pair(
                     *address,
                     repay.seizable_collateral.1.unwrap(),
                     max_repay_assets,
                 );
+                println!("Liquidating on fixed lender {:#?}", address);
+                println!(
+                    "seizing                    {:#?}",
+                    repay.seizable_collateral.1.unwrap()
+                );
+                println!("flash pair                  {:#?}", flash_pair);
+                println!("fee                         {:#?}", flash_fee);
+                println!("swap                        {:#?}", swap_fee);
+                println!("max_repay_assets            {:#?}", max_repay_assets);
 
                 // liquidate using liquidator contract
                 let func = self
@@ -1401,16 +1409,23 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         collateral: Address,
         _max_repay_assets: U256,
     ) -> (Address, u32, u32) {
-        let tokens: HashSet<Address> = HashSet::new();
+        // shadowing repay and collateral with underlying assets
+        let repay = self.markets[&repay].asset;
+        let collateral = self.markets[&collateral].asset;
+
         let mut lowest_fee = u32::MAX;
         let mut pair_contract = Address::zero();
-        for token in tokens {
-            if token != collateral {
-                if let Some(pair) = self.token_pairs.get(&ordered_addresses(token, repay)) {
+        println!("collateral {:#?}", collateral);
+        for token in &self.tokens {
+            println!("token      {:#?}", token);
+            if *token != collateral {
+                if let Some(pair) = self.token_pairs.get(&ordered_addresses(*token, repay)) {
+                    println!("pair found");
                     if let Some(rate) = pair.peek() {
+                        println!("rate {:?}", rate.0);
                         if rate.0 < lowest_fee {
                             lowest_fee = rate.0;
-                            pair_contract = token;
+                            pair_contract = *token;
                         }
                     }
                 }
@@ -1435,20 +1450,26 @@ pub struct TokenPair {
     pub fee: u32,
 }
 
-fn parse_token_pairs(token_pairs: &str) -> HashMap<(Address, Address), BinaryHeap<Reverse<u32>>> {
-    let json_pairs: Vec<TokenPair> = serde_json::from_str(token_pairs).unwrap();
+fn parse_token_pairs(
+    token_pairs: &str,
+) -> (
+    HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
+    HashSet<Address>,
+) {
+    let mut tokens = HashSet::new();
+    let json_pairs: Vec<(String, String, u32)> = serde_json::from_str(token_pairs).unwrap();
     let mut pairs = HashMap::new();
-    for pair in json_pairs {
-        println!("pair {:?}", pair);
+    for (token0, token1, fee) in json_pairs {
+        let token0 = Address::from_str(&token0).unwrap();
+        let token1 = Address::from_str(&token1).unwrap();
+        tokens.insert(token0);
+        tokens.insert(token1);
         pairs
-            .entry(ordered_addresses(
-                Address::from_str(&pair.token0).unwrap(),
-                Address::from_str(&pair.token1).unwrap(),
-            ))
+            .entry(ordered_addresses(token0, token1))
             .or_insert(BinaryHeap::new())
-            .push(Reverse(pair.fee));
+            .push(Reverse(fee));
     }
-    pairs
+    (pairs, tokens)
 }
 #[cfg(test)]
 mod services_test {
@@ -1458,22 +1479,22 @@ mod services_test {
 
     #[test]
     fn test_parse_token_pairs() {
-        let tokens = r#"[{
-                            "token0": "0x0000000000000000000000000000000000000000", 
-                            "token1": "0x0000000000000000000000000000000000000001", 
-                            "fee": 3000
-                          },
-                          {
-                            "token0": "0x0000000000000000000000000000000000000000", 
-                            "token1": "0x0000000000000000000000000000000000000001", 
-                            "fee": 1000
-                          },
-                          {
-                            "token0": "0x0000000000000000000000000000000000000000", 
-                            "token1": "0x0000000000000000000000000000000000000001", 
-                            "fee": 2000
-                          }]"#;
-        let pairs = parse_token_pairs(tokens);
+        let tokens = r#"[[
+                            "0x0000000000000000000000000000000000000000", 
+                            "0x0000000000000000000000000000000000000001", 
+                            3000
+                          ],
+                          [
+                            "0x0000000000000000000000000000000000000000", 
+                            "0x0000000000000000000000000000000000000001", 
+                            1000
+                          ],
+                          [
+                            "0x0000000000000000000000000000000000000000", 
+                            "0x0000000000000000000000000000000000000001", 
+                            2000
+                          ]]"#;
+        let (pairs, _) = parse_token_pairs(tokens);
         assert_eq!(
             pairs
                 .get(

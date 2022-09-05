@@ -51,6 +51,7 @@ pub struct Market<M, S> {
     pub floating_b: i128,
     pub floating_max_utilization: u128,
     pub treasury_fee_rate: u128,
+    pub asset: Address,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Eq for Market<M, S> {}
@@ -89,6 +90,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             floating_b: Default::default(),
             floating_max_utilization: Default::default(),
             treasury_fee_rate: Default::default(),
+            asset: Default::default(),
         }
     }
 
