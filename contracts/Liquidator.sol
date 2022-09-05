@@ -74,21 +74,22 @@ contract Liquidator is Owned, IUniswapV3FlashCallback {
 
     uint256 flashRepay = f.flashBorrow + (address(repayAsset) == poolKey.token0 ? fee0 : fee1);
 
-    ERC20 seizeAsset = f.seizeMarket.asset();
-    ISwapRouter memSwapRouter = swapRouter;
-    seizeAsset.safeApprove(address(memSwapRouter), type(uint256).max);
-    memSwapRouter.exactOutputSingle(
-      ISwapRouter.ExactOutputSingleParams({
-        tokenIn: address(seizeAsset),
-        tokenOut: address(repayAsset),
-        fee: f.swapFee,
-        recipient: address(this),
-        deadline: block.timestamp,
-        amountOut: flashRepay,
-        amountInMaximum: type(uint256).max,
-        sqrtPriceLimitX96: 0
-      })
-    );
+    if (f.repayMarket != f.seizeMarket) {
+      ERC20 seizeAsset = f.seizeMarket.asset();
+      seizeAsset.safeApprove(address(swapRouter), type(uint256).max);
+      swapRouter.exactOutputSingle(
+        ISwapRouter.ExactOutputSingleParams({
+          tokenIn: address(seizeAsset),
+          tokenOut: address(repayAsset),
+          fee: f.swapFee,
+          recipient: address(this),
+          deadline: block.timestamp,
+          amountOut: flashRepay,
+          amountInMaximum: type(uint256).max,
+          sqrtPriceLimitX96: 0
+        })
+      );
+    }
 
     repayAsset.safeTransfer(msg.sender, flashRepay);
   }
