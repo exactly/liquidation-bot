@@ -13,7 +13,7 @@ import type {
 } from "hardhat/types";
 
 const config: HardhatUserConfig = {
-  solidity: { version: "0.8.15", settings: { optimizer: { enabled: true, runs: 6_666_666 } } },
+  solidity: { version: "0.8.16", settings: { optimizer: { enabled: true, runs: 6_666_666 } } },
   networks: {
     hardhat: { ...(env.RINKEBY_NODE && { forking: { network: "rinkeby", url: env.RINKEBY_NODE as string } }) },
     rinkeby: {
