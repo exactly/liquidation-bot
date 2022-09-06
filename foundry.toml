@@ -1,0 +1,11 @@
+[profile.default]
+solc = '0.8.16'
+optimizer = true
+optimizer_runs = 6_666_666
+
+src = 'test'
+out = 'artifacts/.foundry'
+cache_path = 'cache/.foundry'
+verbosity = 3
+
+fs_permissions = [{ access = "read", path = "deployments/" }]
