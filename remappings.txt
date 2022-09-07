@@ -1,3 +1,4 @@
+@exactly-protocol/=node_modules/@exactly-protocol/
 @chainlink/=node_modules/@chainlink/
 @openzeppelin/=node_modules/@openzeppelin/
 @uniswap/=node_modules/@uniswap/

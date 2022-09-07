@@ -8,4 +8,4 @@ out = 'artifacts/.foundry'
 cache_path = 'cache/.foundry'
 verbosity = 3
 
-fs_permissions = [{ access = "read", path = "deployments/" }]
+fs_permissions = [{ access = "read", path = "./" }]
