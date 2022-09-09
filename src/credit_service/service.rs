@@ -879,7 +879,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 let max_repay_assets =
                     Self::max_repay_assets(repay, &self.liquidation_incentive, U256::MAX);
 
-                let (flash_pair, flash_fee, swap_fee): (Address, u32, u32) = self.get_flash_pair(
+                let (pool_pair, fee): (Address, u32) = self.get_flash_pair(
                     *address,
                     repay.seizable_collateral.1.unwrap(),
                     max_repay_assets,
@@ -889,9 +889,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     "seizing                    {:#?}",
                     repay.seizable_collateral.1.unwrap()
                 );
-                println!("flash pair                  {:#?}", flash_pair);
-                println!("fee                         {:#?}", flash_fee);
-                println!("swap                        {:#?}", swap_fee);
+                println!("flash pair                  {:#?}", pool_pair);
+                println!("fee                         {:#?}", fee);
                 println!("max_repay_assets            {:#?}", max_repay_assets);
 
                 // liquidate using liquidator contract
@@ -902,9 +901,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         repay.seizable_collateral.1.unwrap(),
                         account.address,
                         max_repay_assets,
-                        flash_pair,
-                        flash_fee,
-                        swap_fee,
+                        pool_pair,
+                        fee,
                     )
                     .gas(6_666_666);
 
@@ -1408,7 +1406,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         repay: Address,
         collateral: Address,
         _max_repay_assets: U256,
-    ) -> (Address, u32, u32) {
+    ) -> (Address, u32) {
         // shadowing repay and collateral with underlying assets
         let repay = self.markets[&repay].asset;
         let collateral = self.markets[&collateral].asset;
@@ -1431,7 +1429,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 }
             }
         }
-        (pair_contract, lowest_fee, lowest_fee)
+        (pair_contract, lowest_fee)
     }
 }
 
