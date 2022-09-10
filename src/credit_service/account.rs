@@ -6,8 +6,8 @@ use std::{
 };
 
 use super::{
-    BorrowAtMaturityFilter, DepositAtMaturityFilter, LiquidateFilter, Market,
-    RepayAtMaturityFilter, SeizeFilter, WithdrawAtMaturityFilter,
+    BorrowAtMaturityFilter, DepositAtMaturityFilter, Market, RepayAtMaturityFilter, SeizeFilter,
+    WithdrawAtMaturityFilter,
 };
 
 use crate::fixed_point_math::FixedPointMath;
@@ -166,10 +166,6 @@ impl Account {
         if let Some(position) = data.fixed_borrow_positions.get_mut(&repay.maturity) {
             *position -= repay.position_assets;
         }
-    }
-
-    pub fn liquidate_borrow(&mut self, _liquidate: LiquidateFilter, _fixed_lender: &Address) {
-        // It needs no action since the events emitted by the repay_at_maturity are enough to liquidate the borrow
     }
 
     pub fn asset_seized(&mut self, _seize: SeizeFilter, _fixed_lender: &Address) {

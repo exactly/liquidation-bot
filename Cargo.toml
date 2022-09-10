@@ -5,6 +5,9 @@ authors = ["Rodrigo Bronzelle <bronzelle@gmail.com>", "danilo neves cruz <cruzda
 edition = "2021"
 default-run = "liq-rs"
 
+[features]
+liquidation-stats = []
+
 [dependencies]
 dotenv = "0.15"
 ethers = { git = "https://github.com/gakonst/ethers-rs", features = ['ws', 'rustls'] }

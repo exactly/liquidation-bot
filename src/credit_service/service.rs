@@ -16,7 +16,7 @@ use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, BufWriter};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
@@ -26,6 +26,9 @@ use tokio::time;
 use tokio_stream::StreamExt;
 
 use super::{ExactlyOracle, Liquidator, MarketAccount, Previewer};
+
+#[cfg(feature = "liquidation-stats")]
+use crate::credit_service::LiquidateFilter;
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
 enum ContractKeyKind {
@@ -79,7 +82,7 @@ macro_rules! compare {
     };
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct LiquidationIncentive {
     pub liquidator: u128,
     pub lenders: u128,
@@ -245,6 +248,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             "=================test===================== {:#?}",
             service.lock().await.last_sync
         );
+        let file = File::create("data.log").unwrap();
+        let mut writer = BufWriter::new(file);
         let mut first_block = service.lock().await.last_sync.0;
         let mut last_block = first_block + PAGE_SIZE;
         let mut latest_block = U64::zero();
@@ -291,7 +296,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     let mut me = service.lock().await;
                     for log in logs {
                         println!("handle get log");
-                        let status = me.handle_log(log, &debounce_tx).await;
+                        let status = me.handle_log(log, &debounce_tx, &mut writer).await;
                         println!("handled log");
                         match status {
                             Ok(result) => {
@@ -369,7 +374,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                                 println!(">>> lock service");
                                 let mut me = service.lock().await;
                                 println!(">>> service locked");
-                                let status = me.handle_log(log, &debounce_tx).await;
+                                let status = me.handle_log(log, &debounce_tx, &mut writer).await;
                                 match status {
                                     Ok(result) => {
                                         if let LogIterating::UpdateFilters = result {
@@ -433,6 +438,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         &mut self,
         log: Log,
         sender: &Sender<TaskActivity>,
+        _writer: &mut BufWriter<File>,
     ) -> Result<LogIterating> {
         let meta = LogMeta::from(&log);
         let result = ExactlyEvents::decode_log(&RawLog {
@@ -663,11 +669,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     .or_insert_with(|| Account::new(data.borrower, &self.markets))
                     .repay_at_maturity(&data, &meta.address);
             }
-            ExactlyEvents::LiquidateFilter(data) => {
-                self.accounts
-                    .entry(data.borrower)
-                    .or_insert_with(|| Account::new(data.borrower, &self.markets))
-                    .liquidate_borrow(data, &meta.address);
+            ExactlyEvents::LiquidateFilter(_data) => {
+                #[cfg(feature = "liquidation-stats")]
+                self.handle_liquidate_event(&meta, &_data, _writer).await?;
             }
             ExactlyEvents::SeizeFilter(data) => {
                 self.accounts
@@ -864,6 +868,166 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         );
         println!("accounts to liquidate {:#?}", liquidations_counter);
         self.liquidate(&liquidations).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "liquidation-stats")]
+    async fn handle_liquidate_event(
+        &self,
+        meta: &LogMeta,
+        data: &LiquidateFilter,
+        writer: &mut BufWriter<File>,
+    ) -> Result<()> {
+        use ethers::types::{Block, TransactionReceipt, H256};
+        use futures::TryFutureExt;
+        use std::io::Write;
+
+        let mut previous_multicall =
+            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        previous_multicall.add_call(self.auditor.account_liquidity(
+            data.borrower,
+            Address::zero(),
+            U256::zero(),
+        ));
+        previous_multicall.add_call(self.auditor.liquidation_incentive());
+        previous_multicall.add_call(self.previewer.exactly(data.borrower));
+        let previous_multicall = previous_multicall.block(meta.block_number - 1u64);
+
+        let mut current_multicall =
+            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        current_multicall.add_call(self.auditor.account_liquidity(
+            data.borrower,
+            Address::zero(),
+            U256::zero(),
+        ));
+        current_multicall.add_call(self.auditor.liquidation_incentive());
+        let current_multicall = current_multicall.block(meta.block_number);
+
+        let mut price_multicall =
+            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        for market in self.markets.keys() {
+            price_multicall.add_call(self.oracle.asset_price(*market));
+        }
+        let price_multicall = price_multicall.block(meta.block_number - 1u64);
+
+        let response = tokio::try_join!(
+            previous_multicall.call(),
+            current_multicall.call(),
+            price_multicall.call_raw(),
+            self.client
+                .provider()
+                .get_block(meta.block_number)
+                .map_err(|_| ethers::prelude::ContractError::ConstructorError),
+            self.client
+                .provider()
+                .get_transaction_receipt(meta.transaction_hash)
+                .map_err(|_| ethers::prelude::ContractError::ConstructorError),
+        );
+        let (previous, current, prices, current_block_data, receipt): (
+            _,
+            _,
+            _,
+            Option<Block<H256>>,
+            Option<TransactionReceipt>,
+        ) = if let Ok(response) = response {
+            response
+        } else {
+            println!("error getting data from contracts on current block");
+            return Ok(());
+        };
+        let current_block_data = current_block_data.unwrap();
+        let timestamp = current_block_data.timestamp;
+        let receipt = receipt.unwrap();
+        let gas_cost = receipt.gas_used.unwrap();
+        let gas_price = gas_cost * receipt.effective_gas_price.unwrap();
+
+        let market_prices: HashMap<Address, U256> = self
+            .markets
+            .keys()
+            .zip(prices)
+            .map(|(market, price)| (*market, price.into_uint().unwrap()))
+            .collect();
+
+        let ((current_adjusted_collateral, current_adjusted_debt), (_, _)): (
+            (U256, U256),
+            (u128, u128),
+        ) = current;
+        let (
+            (previous_adjusted_collateral, previous_adjusted_debt),
+            (previous_liquidator, previous_lenders),
+            previous_market_account,
+        ): ((U256, U256), (u128, u128), Vec<MarketAccount>) = previous;
+
+        let mut total_debt = U256::zero();
+        let mut total_collateral = U256::zero();
+        for market_account in previous_market_account {
+            if market_account.is_collateral {
+                total_collateral += market_account.floating_deposit_assets.mul_div_down(
+                    market_prices[&market_account.market],
+                    U256::exp10(market_account.decimals as usize),
+                )
+            };
+
+            let mut market_debt = U256::zero();
+            for fixed_position in market_account.fixed_borrow_positions {
+                let borrowed = fixed_position.position.principal + fixed_position.position.fee;
+                market_debt += borrowed;
+                if U256::from(fixed_position.maturity) < timestamp {
+                    market_debt += borrowed.mul_wad_down(
+                        (timestamp - U256::from(fixed_position.maturity))
+                            * U256::from(market_account.penalty_rate),
+                    )
+                }
+            }
+            market_debt += market_account.floating_borrow_assets;
+            total_debt += market_debt.mul_div_up(
+                market_prices[&market_account.market],
+                U256::exp10(market_account.decimals as usize),
+            );
+        }
+
+        let previous_liquidation_incentive = LiquidationIncentive {
+            liquidator: previous_liquidator,
+            lenders: previous_lenders,
+        };
+        let repay = Repay {
+            adjusted_collateral: previous_adjusted_collateral,
+            adjusted_debt: previous_adjusted_debt,
+            total_collateral,
+            total_debt,
+            price: market_prices[&meta.address],
+            decimals: self.markets[&meta.address].decimals,
+            ..Default::default()
+        };
+
+        let close_factor = Self::calculate_close_factor(&repay, &previous_liquidation_incentive);
+        let current_hf = if current_adjusted_debt > U256::zero() {
+            current_adjusted_collateral.div_wad_down(current_adjusted_debt)
+        } else {
+            U256::zero()
+        };
+        let previous_hf = if previous_adjusted_debt > U256::zero() {
+            previous_adjusted_collateral.div_wad_down(previous_adjusted_debt)
+        } else {
+            U256::zero()
+        };
+        let liquidators_fee = data.seized_assets * U256::from(previous_liquidator);
+        writer.write_fmt(format_args!(
+            "{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?}\n",
+            timestamp,
+            data.borrower,
+            total_collateral,
+            total_debt,
+            previous_hf,
+            close_factor,
+            data.seized_assets,
+            data.assets,
+            current_hf,
+            liquidators_fee,
+            data.lenders_assets,
+            gas_cost,
+            gas_price
+        ))?;
         Ok(())
     }
 
@@ -1356,28 +1520,33 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         Ok((hf, adjusted_collateral, adjusted_debt, repay))
     }
 
-    fn max_repay_assets(
-        repay: &Repay,
-        liquidation_incentive: &LiquidationIncentive,
-        max_liquidator_assets: U256,
-    ) -> U256 {
-        println!("repay {:?}", repay);
+    fn calculate_close_factor(repay: &Repay, liquidation_incentive: &LiquidationIncentive) -> U256 {
         let target_health = U256::exp10(16usize) * 125u32;
-        let adjusted_factor = repay
+        let adjust_factor = repay
             .adjusted_collateral
             .div_wad_up(repay.total_collateral)
             .mul_wad_up(repay.total_debt.div_wad_up(repay.adjusted_debt));
-        println!("adjusted_factor {:?}", adjusted_factor);
+        println!("adjust_factor {:?}", adjust_factor);
         let close_factor =
             (target_health - repay.adjusted_collateral.div_wad_up(repay.adjusted_debt)).div_wad_up(
                 target_health
-                    - adjusted_factor.mul_wad_down(
+                    - adjust_factor.mul_wad_down(
                         U256::exp10(18)
                             + liquidation_incentive.liquidator
                             + liquidation_incentive.lenders,
                     ),
             );
         println!("close_factor {:?}", close_factor);
+        close_factor
+    }
+
+    fn max_repay_assets(
+        repay: &Repay,
+        liquidation_incentive: &LiquidationIncentive,
+        max_liquidator_assets: U256,
+    ) -> U256 {
+        println!("repay {:?}", repay);
+        let close_factor = Self::calculate_close_factor(repay, liquidation_incentive);
         U256::min(
             U256::min(
                 repay
