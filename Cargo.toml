@@ -1,9 +1,9 @@
 [package]
-name = "liq-rs"
+name = "liq-bot"
 version = "0.1.0"
 authors = ["Rodrigo Bronzelle <bronzelle@gmail.com>", "danilo neves cruz <cruzdanilo@gmail.com>"]
 edition = "2021"
-default-run = "liq-rs"
+default-run = "liq-bot"
 
 [features]
 liquidation-stats = []
@@ -13,8 +13,8 @@ dotenv = "0.15"
 ethers = { git = "https://github.com/gakonst/ethers-rs", features = ['ws', 'rustls'] }
 eyre = "0.6.8"
 futures = "0.3.21"
+pin-project-lite = "0.2.9"
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.82"
 tokio = { version = "1.19.2", features = ["macros", "rt-multi-thread"] }
 tokio-stream = "0.1.8"
-pin-project-lite = "0.2.9"

@@ -1,21 +1,22 @@
 # syntax=docker/dockerfile:1.2
-FROM rust
+FROM rust:slim-bullseye AS builder
 
-WORKDIR /
+WORKDIR /liq-bot
 
-COPY Cargo.toml .
-COPY Cargo.lock .
-COPY src src
 COPY node_modules node_modules
+COPY Cargo.lock .
+COPY Cargo.toml .
+COPY deployments deployments
+COPY src src
 
-RUN cargo build
+RUN cargo build --release
 
-ARG CHAIN_ID
-ARG PRIVATE_KEY
-ARG ETH_RINKEBY_PROVIDER
+FROM debian:stable-slim
 
-ENV CHAIN_ID $CHAIN_ID
-ENV PRIVATE_KEY $PRIVATE_KEY
-ENV ETH_RINKEBY_PROVIDER $ETH_RINKEBY_PROVIDER
+WORKDIR /liq-bot
 
-ENTRYPOINT [ "target/debug/liq-rs" ]
+COPY --from=builder /liq-bot/target/release/liq-bot .
+COPY --from=builder /liq-bot/deployments deployments
+COPY --from=builder /liq-bot/node_modules/@exactly-protocol/protocol/deployments node_modules/@exactly-protocol/protocol/deployments
+
+ENTRYPOINT [ "/liq-bot/liq-bot" ]
