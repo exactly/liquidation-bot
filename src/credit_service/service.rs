@@ -1582,11 +1582,19 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
         let mut lowest_fee = u32::MAX;
         let mut pair_contract = Address::zero();
+
+        if collateral != repay {
+            if let Some(pair) = self.token_pairs.get(&ordered_addresses(collateral, repay)) {
+                return (collateral, pair.peek().unwrap().0);
+            }
+            return (collateral, 0);
+        }
+
         println!("collateral {:#?}", collateral);
         for token in &self.tokens {
             println!("token      {:#?}", token);
             if *token != collateral {
-                if let Some(pair) = self.token_pairs.get(&ordered_addresses(*token, repay)) {
+                if let Some(pair) = self.token_pairs.get(&ordered_addresses(*token, collateral)) {
                     println!("pair found");
                     if let Some(rate) = pair.peek() {
                         println!("rate {:?}", rate.0);
