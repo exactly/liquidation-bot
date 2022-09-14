@@ -1,0 +1,14 @@
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+jobs:
+  deploy:
+    uses: ./.github/workflows/build-and-deploy.yaml
+    with:
+      environment: rinkeby
+      project_id: exactly-liq-bot
+    secrets:
+      service_account_key: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+      ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
