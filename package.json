@@ -1,10 +1,11 @@
 {
   "scripts": {
-    "test": "hardhat test",
+    "test": "forge test",
     "lint": "run-s --continue-on-error lint:**",
     "lint:eslint": "eslint --ext .ts,.js,.cjs,.mjs .",
     "lint:solhint": "solhint 'contracts/**/*.sol'",
-    "lint:slither": "slither ."
+    "lint:slither": "slither .",
+    "postinstall": "forge install"
   },
   "engines": {
     "node": ">=16"
