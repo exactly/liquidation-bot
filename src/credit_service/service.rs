@@ -153,7 +153,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         let auditor_markets = auditor.all_markets().call().await?;
         let mut markets = HashMap::<Address, Market<M, S>>::new();
         for market in auditor_markets {
-            println!("Adding market {:?}", market);
             markets
                 .entry(market)
                 .or_insert_with_key(|key| Market::new(*key, &client));
@@ -223,18 +222,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         TaskActivity::StopCheckLiquidation => check_liquidations = false,
                         TaskActivity::BlockUpdated(block) => {
                             block_number = block;
-                            println!("### just received log");
                             liquidation_checked = false;
                         }
                     },
-                    Ok(None) => {
-                        println!("### end of stream");
-                    }
+                    Ok(None) => {}
                     Err(_) => {
-                        println!("### {:?}ms since network activity", d.as_millis());
                         if check_liquidations && !liquidation_checked {
                             if let Some(block) = block_number {
-                                println!("### checking liquidations");
                                 let lock = me.lock().await.check_liquidations(block).await;
                                 liquidation_checked = true;
                                 drop(lock);
@@ -244,10 +238,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 }
             }
         });
-        println!(
-            "=================test===================== {:#?}",
-            service.lock().await.last_sync
-        );
         let file = File::create("data.log").unwrap();
         let mut writer = BufWriter::new(file);
         let mut first_block = service.lock().await.last_sync.0;
@@ -273,20 +263,16 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         .cloned()
                         .collect::<Vec<Address>>(),
                 );
-                println!(">>> Start block: {}", first_block);
                 if getting_logs {
-                    println!(">>> Last block: {}", last_block);
                     filter = filter.to_block(last_block);
                     let result = client.get_logs(&filter).await;
                     if let Ok(logs) = result {
                         (None, Some(logs))
                     } else {
                         a.abort();
-                        println!(">>> Error getting logs: {:?}", result);
                         break 'filter;
                     }
                 } else {
-                    println!(">>> Getting stream");
                     (Some(client.subscribe_logs(&filter).await), None)
                 }
             };
@@ -295,13 +281,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
                     let mut me = service.lock().await;
                     for log in logs {
-                        println!("handle get log");
                         let status = me.handle_log(log, &debounce_tx, &mut writer).await;
-                        println!("handled log");
                         match status {
                             Ok(result) => {
                                 if let LogIterating::UpdateFilters = result {
-                                    println!(">>> update filter, keep current first block");
                                     first_block = me.last_sync.0;
                                     continue 'filter;
                                 }
@@ -313,7 +296,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         };
                     }
                     if last_block >= latest_block {
-                        println!(">>> reach the end");
                         first_block = last_block + 1u64;
                         getting_logs = false;
                     } else {
@@ -332,21 +314,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
                         first_block = last_block + 1u64;
                         last_block = if first_block + PAGE_SIZE > latest_block {
-                            println!(">>> go to final block");
                             latest_block
                         } else {
-                            println!(">>> next page");
                             last_block + PAGE_SIZE
                         };
                     }
                 }
                 (Some(stream), None) => {
                     _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
-                    println!(">>> checking stream");
                     match stream {
                         Ok(mut stream) => {
                             // let mut last_block = U64::zero();
-                            println!(">>> waiting next block");
                             while let Some(log) = stream.next().await {
                                 // if let Some(block_number) = log.block_number {
                                 //     if block_number != last_block {
@@ -371,9 +349,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                                 //         last_block = block_number;
                                 //     }
                                 // }
-                                println!(">>> lock service");
                                 let mut me = service.lock().await;
-                                println!(">>> service locked");
                                 let status = me.handle_log(log, &debounce_tx, &mut writer).await;
                                 match status {
                                     Ok(result) => {
@@ -412,7 +388,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     }
 
     async fn update_prices(&mut self, block: U64) -> Result<()> {
-        println!("\nUpdating prices for block {}:\n", block);
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
         let mut update = false;
@@ -423,11 +398,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         if !update {
             return Ok(());
         }
-        println!("call multicall for updating prices for block {}", block);
         let result = multicall.block(block).call_raw().await?;
         for (i, market) in self.markets.values_mut().filter(|m| m.listed).enumerate() {
             market.oracle_price = result[i].clone().into_uint().unwrap();
-            println!("new price: {:#?}", market.oracle_price);
         }
 
         Ok(())
@@ -528,7 +501,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 multicall.add_call(market.contract.treasury_fee_rate());
                 multicall.add_call(market.contract.asset());
                 multicall = multicall.block(meta.block_number);
-                println!("Call multicall for market {}", market.contract.address());
                 let (
                     max_future_pools,
                     earnings_accumulator_smooth_factor,
@@ -550,15 +522,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 multicall.add_call(irm.floating_curve_a());
                 multicall.add_call(irm.floating_curve_b());
                 multicall.add_call(irm.floating_max_utilization());
-                println!("Call multicall for interest rate model {}", irm.address());
                 let result = multicall.block(meta.block_number).call().await;
                 if let Ok((floating_a, floating_b, floating_max_utilization)) = result {
-                    println!("success getting interest rate model data");
                     market.floating_a = floating_a;
                     market.floating_b = floating_b;
                     market.floating_max_utilization = floating_max_utilization;
-                } else {
-                    println!("error getting interest rate model data");
                 }
                 self.contracts_to_listen.insert(
                     ContractKey {
@@ -592,12 +560,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 multicall.add_call(irm.floating_max_utilization());
                 let result = multicall.block(meta.block_number).call().await;
                 if let Ok((floating_a, floating_b, floating_max_utilization)) = result {
-                    println!("success getting interest rate model data");
                     market.floating_a = floating_a;
                     market.floating_b = floating_b;
                     market.floating_max_utilization = floating_max_utilization;
-                } else {
-                    println!("error getting interest rate model data");
                 }
                 self.last_sync = (
                     meta.block_number,
@@ -751,12 +716,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         None
                     })
                     .unwrap();
-                println!("=data.current {:#?}", data.current);
-                println!("=data.current {:#?}", data.current.into_raw());
-                println!(
-                    "=data.current {:#?}",
-                    data.current.into_raw() * U256::exp10(10)
-                );
                 self.markets
                     .entry(market)
                     .or_insert_with_key(|key| Market::new(*key, &self.client))
@@ -822,17 +781,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 println!("Event not handled - {:?}", event);
             }
         }
-        println!("send 0");
         sender
             .send(TaskActivity::BlockUpdated(log.block_number))
             .await?;
-        println!("send 1");
         Ok(LogIterating::NextLog)
     }
 
     async fn check_liquidations(&self, block_number: U64) -> Result<()> {
         println!("check_liquidations");
-        // let previewer_borrowers = self.multicall_previewer(U64::from(&to)).await;
         let to_timestamp = self
             .client
             .provider()
@@ -1034,11 +990,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     async fn liquidate(&self, liquidations: &HashMap<Address, (Account, Repay)>) -> Result<()> {
         for (_, (account, repay)) in liquidations {
             println!("Liquidating account {:?}", account);
-            // if account.address
-            //     != Address::from_str("0x279ab4aafeaad01ec6b0bc07957b387b1502248d").unwrap()
-            // {
-            //     continue;
-            // }
             if let Some(address) = &repay.market_to_liquidate.1 {
                 let max_repay_assets =
                     Self::max_repay_assets(repay, &self.liquidation_incentive, U256::MAX);
@@ -1112,7 +1063,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             }
             let responses = multicall.block(block).call_raw().await;
             if let Err(_) = responses {
-                println!("old previewer, no comparison will be made");
                 return positions;
             }
             let responses = responses.unwrap();
@@ -1146,7 +1096,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         if previewer_accounts.len() == 0 {
             return Ok(());
         };
-        println!("previewer on block {}", block);
         for (address, previewer_account) in previewer_accounts {
             let account = &accounts[address];
             success &= compare!(
@@ -1526,7 +1475,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             .adjusted_collateral
             .div_wad_up(repay.total_collateral)
             .mul_wad_up(repay.total_debt.div_wad_up(repay.adjusted_debt));
-        println!("adjust_factor {:?}", adjust_factor);
         let close_factor =
             (target_health - repay.adjusted_collateral.div_wad_up(repay.adjusted_debt)).div_wad_up(
                 target_health
@@ -1536,7 +1484,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                             + liquidation_incentive.lenders,
                     ),
             );
-        println!("close_factor {:?}", close_factor);
         close_factor
     }
 
@@ -1545,7 +1492,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         liquidation_incentive: &LiquidationIncentive,
         max_liquidator_assets: U256,
     ) -> U256 {
-        println!("repay {:?}", repay);
         let close_factor = Self::calculate_close_factor(repay, liquidation_incentive);
         U256::min(
             U256::min(
@@ -1590,14 +1536,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             return (collateral, 0);
         }
 
-        println!("collateral {:#?}", collateral);
         for token in &self.tokens {
-            println!("token      {:#?}", token);
             if *token != collateral {
                 if let Some(pair) = self.token_pairs.get(&ordered_addresses(*token, collateral)) {
-                    println!("pair found");
                     if let Some(rate) = pair.peek() {
-                        println!("rate {:?}", rate.0);
                         if rate.0 < lowest_fee {
                             lowest_fee = rate.0;
                             pair_contract = *token;
