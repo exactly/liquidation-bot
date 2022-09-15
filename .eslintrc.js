@@ -23,11 +23,4 @@ module.exports = {
     "@typescript-eslint/no-unused-vars": ["error", { ignoreRestSiblings: true }],
     "node/no-unsupported-features/es-syntax": ["error", { ignores: ["modules"] }],
   },
-  overrides: [
-    {
-      files: ["test/**/*"],
-      extends: ["plugin:mocha/recommended", "plugin:chai-expect/recommended", "plugin:chai-friendly/recommended"],
-      rules: { "mocha/no-mocha-arrows": "off" },
-    },
-  ],
 };
