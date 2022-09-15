@@ -86,6 +86,17 @@ contract LiquidatorTest is Test {
     assertGt(usdc.balanceOf(address(liquidator)), 0);
   }
 
+  function testTransfer() external {
+    deal(address(usdc), address(liquidator), 666_666e6);
+    assertEq(usdc.balanceOf(address(this)), 0);
+    assertEq(usdc.balanceOf(address(liquidator)), 666_666e6);
+
+    liquidator.transfer(usdc, address(this), 666_666e6);
+
+    assertEq(usdc.balanceOf(address(this)), 666_666e6);
+    assertEq(usdc.balanceOf(address(liquidator)), 0);
+  }
+
   function getAddress(string memory name, string memory base) internal returns (address addr) {
     if (block.chainid == 31337) return address(0);
 

@@ -108,8 +108,8 @@ contract Liquidator is Owned, IUniswapV3FlashCallback, IUniswapV3SwapCallback {
     repayAsset.safeTransfer(msg.sender, f.flashBorrow + (address(repayAsset) == poolKey.token0 ? fee0 : fee1));
   }
 
-  function drain(ERC20 asset) external onlyOwner {
-    asset.safeTransfer(owner, asset.balanceOf(address(this)));
+  function transfer(ERC20 asset, address to, uint256 amount) external onlyOwner {
+    asset.safeTransfer(to, amount);
   }
 }
 
