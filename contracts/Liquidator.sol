@@ -7,6 +7,7 @@ import { SafeTransferLib } from "solmate/src/utils/SafeTransferLib.sol";
 import { IUniswapV3FlashCallback } from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3FlashCallback.sol";
 import { IUniswapV3SwapCallback } from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
 import { IUniswapV3Pool } from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
+import { ISwapRouter } from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 
 contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapCallback {
   using SafeTransferLib for ERC20;
@@ -17,11 +18,13 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
   uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
   address public immutable factory;
+  ISwapRouter public immutable swapRouter;
 
   mapping(address => bool) public callers;
 
-  constructor(address owner_, address factory_) Auth(owner_, this) {
+  constructor(address owner_, address factory_, ISwapRouter swapRouter_) Auth(owner_, this) {
     factory = factory_;
+    swapRouter = swapRouter_;
   }
 
   function liquidate(
@@ -108,6 +111,28 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     f.repayMarket.liquidate(f.borrower, f.maxRepay, f.seizeMarket);
 
     repayAsset.safeTransfer(msg.sender, f.flashBorrow + (address(repayAsset) == poolKey.token0 ? fee0 : fee1));
+  }
+
+  function swap(
+    ERC20 assetIn,
+    uint256 amountIn,
+    ERC20 assetOut,
+    uint256 amountOutMinimum,
+    uint24 fee
+  ) external requiresAuth {
+    assetIn.safeApprove(address(swapRouter), amountIn);
+    swapRouter.exactInputSingle(
+      ISwapRouter.ExactInputSingleParams({
+        tokenIn: address(assetIn),
+        tokenOut: address(assetOut),
+        fee: fee,
+        recipient: address(this),
+        deadline: block.timestamp,
+        amountIn: amountIn,
+        amountOutMinimum: amountOutMinimum,
+        sqrtPriceLimitX96: 0
+      })
+    );
   }
 
   function transfer(ERC20 asset, address to, uint256 amount) external requiresAuth {

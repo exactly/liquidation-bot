@@ -6,7 +6,7 @@ import { Market } from "@exactly-protocol/protocol/contracts/Market.sol";
 import { Auditor } from "@exactly-protocol/protocol/contracts/Auditor.sol";
 import { MockPriceFeed } from "@exactly-protocol/protocol/contracts/mocks/MockPriceFeed.sol";
 import { ExactlyOracle, AggregatorV2V3Interface } from "@exactly-protocol/protocol/contracts/ExactlyOracle.sol";
-import { Liquidator, IMarket, ERC20, PoolAddress } from "../contracts/Liquidator.sol";
+import { Liquidator, IMarket, ERC20, ISwapRouter, PoolAddress } from "../contracts/Liquidator.sol";
 
 contract LiquidatorTest is Test {
   using stdJson for string;
@@ -23,7 +23,11 @@ contract LiquidatorTest is Test {
   ERC20 internal dai;
 
   function setUp() public {
-    liquidator = new Liquidator(address(this), getAddress("UniswapV3Factory", ""));
+    liquidator = new Liquidator(
+      address(this),
+      getAddress("UniswapV3Factory", ""),
+      ISwapRouter(getAddress("UniswapV3Router", ""))
+    );
 
     dai = ERC20(getAddress("DAI", "node_modules/@exactly-protocol/protocol/"));
     usdc = ERC20(getAddress("USDC", "node_modules/@exactly-protocol/protocol/"));
@@ -84,6 +88,17 @@ contract LiquidatorTest is Test {
 
     liquidator.liquidate(IMarket(address(marketUSDC)), IMarket(address(marketUSDC)), ALICE, 2_000e6, address(dai), 500);
     assertGt(usdc.balanceOf(address(liquidator)), 0);
+  }
+
+  function testSwap() external {
+    deal(address(usdc), address(liquidator), 666_666e6);
+    assertEq(dai.balanceOf(address(liquidator)), 0);
+    assertEq(usdc.balanceOf(address(liquidator)), 666_666e6);
+
+    liquidator.swap(usdc, 666_666e6, dai, 0, 500);
+
+    assertGt(dai.balanceOf(address(liquidator)), 0);
+    assertEq(usdc.balanceOf(address(liquidator)), 0);
   }
 
   function testTransfer() external {
