@@ -23,7 +23,7 @@ contract LiquidatorTest is Test {
   ERC20 internal dai;
 
   function setUp() public {
-    liquidator = new Liquidator(getAddress("UniswapV3Factory", ""));
+    liquidator = new Liquidator(address(this), getAddress("UniswapV3Factory", ""));
 
     dai = ERC20(getAddress("DAI", "node_modules/@exactly-protocol/protocol/"));
     usdc = ERC20(getAddress("USDC", "node_modules/@exactly-protocol/protocol/"));
@@ -95,6 +95,30 @@ contract LiquidatorTest is Test {
 
     assertEq(usdc.balanceOf(address(this)), 666_666e6);
     assertEq(usdc.balanceOf(address(liquidator)), 0);
+  }
+
+  function testAuthority() external {
+    vm.prank(ALICE);
+    vm.expectRevert("UNAUTHORIZED");
+    liquidator.addCaller(ALICE);
+
+    vm.prank(ALICE);
+    vm.expectRevert("UNAUTHORIZED");
+    liquidator.liquidate(IMarket(address(0)), IMarket(address(0)), address(0), 0, address(0), 0);
+
+    liquidator.addCaller(ALICE);
+
+    vm.prank(ALICE);
+    vm.expectRevert("UNAUTHORIZED");
+    liquidator.addCaller(ALICE);
+
+    vm.prank(ALICE);
+    vm.expectRevert("UNAUTHORIZED");
+    liquidator.transfer(ERC20(address(0)), address(0), 0);
+
+    vm.prank(ALICE);
+    vm.expectRevert();
+    liquidator.liquidate(IMarket(address(0)), IMarket(address(0)), address(0), 0, address(0), 0);
   }
 
   function getAddress(string memory name, string memory base) internal returns (address addr) {

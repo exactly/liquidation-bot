@@ -2,13 +2,13 @@
 pragma solidity 0.8.16;
 
 import { ERC20 } from "solmate/src/tokens/ERC20.sol";
-import { Owned } from "solmate/src/auth/Owned.sol";
+import { Auth, Authority } from "solmate/src/auth/Auth.sol";
 import { SafeTransferLib } from "solmate/src/utils/SafeTransferLib.sol";
 import { IUniswapV3FlashCallback } from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3FlashCallback.sol";
 import { IUniswapV3SwapCallback } from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
 import { IUniswapV3Pool } from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 
-contract Liquidator is Owned, IUniswapV3FlashCallback, IUniswapV3SwapCallback {
+contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapCallback {
   using SafeTransferLib for ERC20;
 
   /// @dev The minimum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MIN_TICK)
@@ -18,7 +18,9 @@ contract Liquidator is Owned, IUniswapV3FlashCallback, IUniswapV3SwapCallback {
 
   address public immutable factory;
 
-  constructor(address factory_) Owned(msg.sender) {
+  mapping(address => bool) public callers;
+
+  constructor(address owner_, address factory_) Auth(owner_, this) {
     factory = factory_;
   }
 
@@ -29,7 +31,7 @@ contract Liquidator is Owned, IUniswapV3FlashCallback, IUniswapV3SwapCallback {
     uint256 maxRepay,
     address poolPair,
     uint24 fee
-  ) external onlyOwner {
+  ) external requiresAuth {
     ERC20 repayAsset = repayMarket.asset();
     uint256 availableRepay = repayAsset.balanceOf(address(this));
 
@@ -108,8 +110,24 @@ contract Liquidator is Owned, IUniswapV3FlashCallback, IUniswapV3SwapCallback {
     repayAsset.safeTransfer(msg.sender, f.flashBorrow + (address(repayAsset) == poolKey.token0 ? fee0 : fee1));
   }
 
-  function transfer(ERC20 asset, address to, uint256 amount) external onlyOwner {
+  function transfer(ERC20 asset, address to, uint256 amount) external requiresAuth {
     asset.safeTransfer(to, amount);
+  }
+
+  function canCall(
+    address caller,
+    address,
+    bytes4 functionSig
+  ) external view returns (bool) {
+    return functionSig == this.liquidate.selector && callers[caller];
+  }
+
+  function addCaller(address caller) external requiresAuth {
+    callers[caller] = true;
+  }
+
+  function removeCaller(address caller) external requiresAuth {
+    delete callers[caller];
   }
 }
 

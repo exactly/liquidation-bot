@@ -16,5 +16,6 @@ export default {
   typechain: { outDir: "types" },
   namedAccounts: {
     deployer: { default: 0 },
+    owner: { default: 0, rinkeby: "0x755DF607BA55ff6430FEE0126A52Bf82D1e57F5f" },
   },
 } as HardhatUserConfig;

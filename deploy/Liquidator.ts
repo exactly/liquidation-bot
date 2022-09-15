@@ -1,9 +1,9 @@
 import type { DeployFunction } from "hardhat-deploy/types";
 
 const func: DeployFunction = async ({ deployments: { deploy, get }, getNamedAccounts }) => {
-  const { deployer } = await getNamedAccounts();
+  const { deployer, owner } = await getNamedAccounts();
   await deploy("Liquidator", {
-    args: [(await get("UniswapV3Factory")).address],
+    args: [owner, (await get("UniswapV3Factory")).address],
     from: deployer,
     log: true,
   });
