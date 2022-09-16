@@ -438,16 +438,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         }
         let event = result?;
 
-        println!(
-            "---->     Contract {:?} - {}",
-            meta.address, meta.block_number
-        );
-        // if meta.block_number >= 11276623u64.into() {
-        //     println!("------- event with block number 11276623");
-        //     sender.send(TaskActivity::StartCheckLiquidation).await?;
-        //     std::thread::sleep(Duration::from_secs(2));
-        //     return Ok(LogIterating::UpdateFilters);
-        // }
         if (
             meta.block_number,
             meta.transaction_index.as_u64() as i128,
@@ -461,7 +451,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             meta.transaction_index.as_u64() as i128,
             meta.log_index.as_u128() as i128,
         );
-        println!("{:?}, {:?}", event, meta);
+        println!("{:?} | {:?}", event, meta);
         match event {
             ExactlyEvents::MaxFuturePoolsSetFilter(data) => {
                 self.markets
@@ -550,7 +540,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     },
                     data.market,
                 );
-                market.approve_asset(&self.client).await?;
                 self.update_prices(meta.block_number).await?;
                 self.last_sync = (
                     meta.block_number,
@@ -818,15 +807,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             block.base_fee_per_gas.unwrap_or(*last_gas_price) + U256::from(1_500_000_000);
 
         let to_timestamp = block.timestamp;
-        if (*self.oracle).address() != Address::zero() {
-            // self.update_prices(block_number).await?;
-        }
 
         if self.comparison_enabled {
             println!("comparison_enabled");
             self.compare_accounts(block_number, to_timestamp).await?;
-        } else {
-            println!("not comparison_enabled");
         }
 
         let mut liquidations: HashMap<Address, (Account, Repay)> = HashMap::new();
@@ -1045,7 +1029,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     continue;
                 }
 
-                println!("Liquidating on fixed lender {:#?}", address);
+                println!("Liquidating on market {:#?}", address);
                 println!(
                     "seizing                    {:#?}",
                     repay.seizable_collateral.1.unwrap()
@@ -1063,16 +1047,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         fee,
                     )
                     .gas(6_666_666);
-
-                // liquidate using market liquidate function
-                // let func = self.markets[address]
-                //     .contract
-                //     .liquidate(
-                //         account.address,
-                //         max_repay_assets,
-                //         repay.seizable_collateral.1.unwrap(),
-                //     )
-                //     .gas(6_666_666);
 
                 let tx = func.send().await;
                 println!("tx: {:?}", &tx);
@@ -1580,7 +1554,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     ) -> U256 {
         let max_repay = max_repay.mul_div_down(repay.price, U256::exp10(repay.decimals as usize));
         max_repay.mul_wad_down(U256::from(liquidation_incentive.lenders))
-            + max_repay.mul_wad_down(U256::from(U256::exp10(12) * swap_fee))
+            + max_repay.mul_wad_down(swap_fee * U256::from(U256::exp10(12)))
             + (gas_price * gas_cost).mul_wad_down(eth_price)
     }
 

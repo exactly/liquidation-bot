@@ -5,7 +5,6 @@ use ethers::abi::Address;
 use ethers::prelude::{abigen, Middleware, Signer, SignerMiddleware, U256};
 
 use ethers::types::I256;
-use eyre::Result;
 
 use crate::fixed_point_math::FixedPointMath;
 
@@ -92,26 +91,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             treasury_fee_rate: Default::default(),
             asset: Default::default(),
         }
-    }
-
-    pub async fn approve_asset(&self, client: &Arc<SignerMiddleware<M, S>>) -> Result<()> {
-        let asset_address = self.contract.asset().call().await?;
-        let asset = ERC20::new(asset_address, Arc::clone(client));
-        let allowance = asset
-            .allowance(client.address(), self.contract.address())
-            .call()
-            .await?;
-        if allowance < U256::MAX / 2u128 {
-            let tx = asset.approve(self.contract.address(), U256::MAX);
-            let result = tx.send().await;
-            if let Ok(receipt) = result {
-                let result = receipt.await;
-                if let Err(_) = result {
-                    println!("Transactions not approved!");
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn total_assets(&self, timestamp: U256) -> U256 {
