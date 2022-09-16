@@ -814,7 +814,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             .get_block(block_number)
             .await?
             .unwrap();
-        *last_gas_price = block.base_fee_per_gas.unwrap_or(*last_gas_price);
+        *last_gas_price =
+            block.base_fee_per_gas.unwrap_or(*last_gas_price) + U256::from(1_500_000_000);
 
         let to_timestamp = block.timestamp;
         if (*self.oracle).address() != Address::zero() {
