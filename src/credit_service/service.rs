@@ -1017,8 +1017,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             println!("Liquidating account {:?}", account);
             if let Some(address) = &repay.market_to_liquidate.1 {
                 let max_repay =
-                    Self::max_repay_assets(repay, &self.liquidation_incentive, U256::MAX);
-
+                    Self::max_repay_assets(repay, &self.liquidation_incentive, U256::MAX)
+                        .mul_wad_down(math::WAD + U256::exp10(14))
+                        + math::WAD.mul_div_up(U256::exp10(repay.decimals as usize), repay.price);
                 let (pool_pair, fee): (Address, u32) =
                     self.get_flash_pair(*address, repay.seizable_collateral.1.unwrap(), max_repay);
 
