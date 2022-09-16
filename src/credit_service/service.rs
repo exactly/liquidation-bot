@@ -1,7 +1,7 @@
 use crate::bindings::ExactlyEvents;
 use crate::config::Config;
 use crate::credit_service::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
-use crate::fixed_point_math::FixedPointMath;
+use crate::fixed_point_math::{math, FixedPointMath};
 use ethers::abi::{Tokenizable, Tokenize};
 use ethers::prelude::signer::SignerMiddlewareError;
 use ethers::prelude::{
@@ -812,7 +812,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         for (address, account) in self.accounts.iter() {
             let hf = Self::compute_hf(&self.markets, account, to_timestamp);
             if let Ok((hf, _, _, repay)) = hf {
-                if hf < U256::exp10(18) && repay.adjusted_debt != U256::zero() {
+                if hf < math::WAD && repay.adjusted_debt != U256::zero() {
                     liquidations_counter += 1;
                     liquidations.insert(address.clone(), (account.clone(), repay));
                 }
@@ -1457,9 +1457,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         let hf = if adjusted_debt == U256::zero() {
             adjusted_collateral
         } else {
-            U256::exp10(18) * adjusted_collateral / adjusted_debt
+            math::WAD * adjusted_collateral / adjusted_debt
         };
-        if hf < U256::exp10(18) && adjusted_debt != U256::zero() {
+        if hf < math::WAD && adjusted_debt != U256::zero() {
             println!("==============");
             println!("Account                {:?}", account.address);
             println!("Total Collateral   USD {:?}", total_collateral);
@@ -1475,13 +1475,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             .adjusted_collateral
             .div_wad_up(repay.total_collateral)
             .mul_wad_up(repay.total_debt.div_wad_up(repay.adjusted_debt));
-        let close_factor =
-            (target_health - repay.adjusted_collateral.div_wad_up(repay.adjusted_debt)).div_wad_up(
+        let close_factor = (target_health
+            - repay.adjusted_collateral.div_wad_up(repay.adjusted_debt))
+        .div_wad_up(
                 target_health
                     - adjust_factor.mul_wad_down(
-                        U256::exp10(18)
-                            + liquidation_incentive.liquidator
-                            + liquidation_incentive.lenders,
+                    math::WAD + liquidation_incentive.liquidator + liquidation_incentive.lenders,
                     ),
             );
         close_factor
@@ -1497,11 +1496,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             U256::min(
                 repay
                     .total_debt
-                    .mul_wad_up(U256::min(U256::exp10(18), close_factor)),
+                    .mul_wad_up(U256::min(math::WAD, close_factor)),
                 repay.seize_available.div_wad_up(
-                    U256::exp10(18)
-                        + liquidation_incentive.liquidator
-                        + liquidation_incentive.lenders,
+                    math::WAD + liquidation_incentive.liquidator + liquidation_incentive.lenders,
                 ),
             )
             .mul_div_up(U256::exp10(repay.decimals as usize), repay.price),
@@ -1509,7 +1506,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 < U256::from_str("115792089237316195423570985008687907853269984665640564039457") //// U256::MAX / WAD
                     .unwrap()
             {
-                max_liquidator_assets.div_wad_down(U256::exp10(18) + liquidation_incentive.lenders)
+                max_liquidator_assets.div_wad_down(math::WAD + liquidation_incentive.lenders)
             } else {
                 max_liquidator_assets
             },

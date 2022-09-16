@@ -1,5 +1,15 @@
 use ethers::types::{I256, U256};
 
+pub mod math {
+    use ethers::types::U256;
+
+    pub const WAD: U256 = make_u256(1_000_000_000_000_000_000u64);
+
+    pub const fn make_u256(x: u64) -> U256 {
+        U256([x, 0, 0, 0])
+    }
+}
+
 pub trait FixedPointMath {
     fn mul_div_down(&self, y: Self, denominator: Self) -> Self;
     fn mul_div_up(&self, y: Self, denominator: Self) -> Self;
@@ -8,7 +18,6 @@ pub trait FixedPointMath {
     fn div_wad_down(&self, y: Self) -> Self;
     fn div_wad_up(&self, y: Self) -> Self;
     fn ln_wad(&self) -> I256;
-    fn wad() -> Self;
 }
 
 #[inline(always)]
@@ -34,11 +43,6 @@ fn log2(x: U256) -> U256 {
 }
 
 impl FixedPointMath for U256 {
-    #[inline(always)]
-    fn wad() -> Self {
-        Self::exp10(18)
-    }
-
     fn ln_wad(&self) -> I256 {
         let mut x = *self;
         let k = I256::from_raw(log2(x)) - I256::from(96u32);
@@ -87,19 +91,19 @@ impl FixedPointMath for U256 {
     }
 
     fn mul_wad_down(&self, y: Self) -> Self {
-        self.mul_div_down(y, Self::wad())
+        self.mul_div_down(y, math::WAD)
     }
 
     fn mul_wad_up(&self, y: Self) -> Self {
-        self.mul_div_up(y, Self::wad())
+        self.mul_div_up(y, math::WAD)
     }
 
     fn div_wad_down(&self, y: Self) -> Self {
-        self.mul_div_down(Self::wad(), y)
+        self.mul_div_down(math::WAD, y)
     }
 
     fn div_wad_up(&self, y: Self) -> Self {
-        self.mul_div_up(Self::wad(), y)
+        self.mul_div_up(math::WAD, y)
     }
 
     fn mul_div_down(&self, y: Self, denominator: Self) -> Self {
