@@ -30,6 +30,8 @@ use super::{ExactlyOracle, Liquidator, MarketAccount, Previewer};
 #[cfg(feature = "liquidation-stats")]
 use crate::credit_service::LiquidateFilter;
 
+const DEFAULT_GAS_PRICE: U256 = math::make_u256(10_000u64);
+
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
 enum ContractKeyKind {
     Market,
@@ -104,6 +106,7 @@ pub struct CreditService<M, S> {
     liquidation_incentive: LiquidationIncentive,
     token_pairs: HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
     tokens: HashSet<Address>,
+    market_weth_address: Address,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for CreditService<M, S> {
@@ -169,6 +172,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
         let (token_pairs, tokens) = parse_token_pairs(&config.token_pairs);
 
+        let (market_weth_address, _, _) = Self::parse_abi(&format!(
+            "node_modules/@exactly-protocol/protocol/deployments/{}/MarketWETH.json",
+            config.chain_id_name
+        ));
+
         Ok(CreditService {
             client: Arc::clone(&client),
             last_sync: (U64::from(deployed_block), -1, -1),
@@ -184,6 +192,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             liquidation_incentive: Default::default(),
             token_pairs,
             tokens,
+            market_weth_address,
         })
     }
 
@@ -207,6 +216,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         <M as Middleware>::Provider: PubsubClient,
     {
         const PAGE_SIZE: u64 = 5000;
+
         let service = Arc::new(Mutex::new(self));
         let (debounce_tx, mut debounce_rx) = mpsc::channel(10);
         let me = Arc::clone(&service);
@@ -214,6 +224,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             let mut block_number = None;
             let mut check_liquidations = false;
             let mut liquidation_checked = false;
+            let mut last_gas_price = DEFAULT_GAS_PRICE;
             loop {
                 let d = Duration::from_millis(2_000);
                 match time::timeout(d, debounce_rx.recv()).await {
@@ -229,7 +240,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     Err(_) => {
                         if check_liquidations && !liquidation_checked {
                             if let Some(block) = block_number {
-                                let lock = me.lock().await.check_liquidations(block).await;
+                                let lock = me
+                                    .lock()
+                                    .await
+                                    .check_liquidations(block, &mut last_gas_price)
+                                    .await;
                                 liquidation_checked = true;
                                 drop(lock);
                             }
@@ -787,15 +802,21 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         Ok(LogIterating::NextLog)
     }
 
-    async fn check_liquidations(&self, block_number: U64) -> Result<()> {
+    async fn check_liquidations(
+        &mut self,
+        block_number: U64,
+        last_gas_price: &mut U256,
+    ) -> Result<()> {
         println!("check_liquidations");
-        let to_timestamp = self
+        let block = self
             .client
             .provider()
             .get_block(block_number)
             .await?
-            .unwrap()
-            .timestamp;
+            .unwrap();
+        *last_gas_price = block.base_fee_per_gas.unwrap_or(*last_gas_price);
+
+        let to_timestamp = block.timestamp;
         if (*self.oracle).address() != Address::zero() {
             // self.update_prices(block_number).await?;
         }
@@ -823,7 +844,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             self.accounts.len()
         );
         println!("accounts to liquidate {:#?}", liquidations_counter);
-        self.liquidate(&liquidations).await?;
+        self.liquidate(&liquidations, *last_gas_price).await?;
         Ok(())
     }
 
@@ -987,26 +1008,46 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         Ok(())
     }
 
-    async fn liquidate(&self, liquidations: &HashMap<Address, (Account, Repay)>) -> Result<()> {
+    async fn liquidate(
+        &self,
+        liquidations: &HashMap<Address, (Account, Repay)>,
+        last_gas_price: U256,
+    ) -> Result<()> {
         for (_, (account, repay)) in liquidations {
             println!("Liquidating account {:?}", account);
             if let Some(address) = &repay.market_to_liquidate.1 {
-                let max_repay_assets =
+                let max_repay =
                     Self::max_repay_assets(repay, &self.liquidation_incentive, U256::MAX);
 
-                let (pool_pair, fee): (Address, u32) = self.get_flash_pair(
-                    *address,
-                    repay.seizable_collateral.1.unwrap(),
-                    max_repay_assets,
+                let (pool_pair, fee): (Address, u32) =
+                    self.get_flash_pair(*address, repay.seizable_collateral.1.unwrap(), max_repay);
+
+                let profit = Self::max_profit(repay, max_repay, &self.liquidation_incentive);
+                let cost = Self::max_cost(
+                    repay,
+                    max_repay,
+                    &self.liquidation_incentive,
+                    U256::from(fee),
+                    last_gas_price,
+                    U256::from(1500u128),
+                    self.markets[&self.market_weth_address].oracle_price,
                 );
+                if profit < cost || profit - cost < math::WAD / U256::exp10(16) {
+                    println!("not profitable to liquidate");
+                    println!("profit: {:?}", profit);
+                    println!("cost  : {:?}", cost);
+                    println!(
+                        "repay$: {:?}",
+                        max_repay.mul_div_up(repay.price, U256::exp10(repay.decimals as usize))
+                    );
+                    continue;
+                }
+
                 println!("Liquidating on fixed lender {:#?}", address);
                 println!(
                     "seizing                    {:#?}",
                     repay.seizable_collateral.1.unwrap()
                 );
-                println!("flash pair                  {:#?}", pool_pair);
-                println!("fee                         {:#?}", fee);
-                println!("max_repay_assets            {:#?}", max_repay_assets);
 
                 // liquidate using liquidator contract
                 let func = self
@@ -1015,7 +1056,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         *address,
                         repay.seizable_collateral.1.unwrap(),
                         account.address,
-                        max_repay_assets,
+                        max_repay,
                         pool_pair,
                         fee,
                     )
@@ -1039,6 +1080,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 println!("Liquidation tx {:?}", receipt);
             }
         }
+        println!("done liquidating");
         Ok(())
     }
 
@@ -1478,11 +1520,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         let close_factor = (target_health
             - repay.adjusted_collateral.div_wad_up(repay.adjusted_debt))
         .div_wad_up(
-                target_health
-                    - adjust_factor.mul_wad_down(
+            target_health
+                - adjust_factor.mul_wad_down(
                     math::WAD + liquidation_incentive.liquidator + liquidation_incentive.lenders,
-                    ),
-            );
+                ),
+        );
         close_factor
     }
 
@@ -1511,6 +1553,33 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                 max_liquidator_assets
             },
         )
+    }
+
+    fn max_profit(
+        repay: &Repay,
+        max_repay: U256,
+        liquidation_incentive: &LiquidationIncentive,
+    ) -> U256 {
+        max_repay
+            .mul_div_up(repay.price, U256::exp10(repay.decimals as usize))
+            .mul_wad_down(U256::from(
+                liquidation_incentive.liquidator + liquidation_incentive.lenders,
+            ))
+    }
+
+    fn max_cost(
+        repay: &Repay,
+        max_repay: U256,
+        liquidation_incentive: &LiquidationIncentive,
+        swap_fee: U256,
+        gas_price: U256,
+        gas_cost: U256,
+        eth_price: U256,
+    ) -> U256 {
+        let max_repay = max_repay.mul_div_down(repay.price, U256::exp10(repay.decimals as usize));
+        max_repay.mul_wad_down(U256::from(liquidation_incentive.lenders))
+            + max_repay.mul_wad_down(U256::from(U256::exp10(12) * swap_fee))
+            + (gas_price * gas_cost).mul_wad_down(eth_price)
     }
 
     fn get_flash_pair(
