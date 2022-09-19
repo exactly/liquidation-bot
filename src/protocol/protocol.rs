@@ -1,7 +1,7 @@
-use crate::bindings::ExactlyEvents;
-use crate::config::Config;
-use crate::credit_service::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
-use crate::fixed_point_math::{math, FixedPointMath};
+use super::config::Config;
+use super::exactly_events::ExactlyEvents;
+use super::fixed_point_math::{math, FixedPointMath};
+use crate::protocol::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
 use ethers::abi::{Tokenizable, Tokenize};
 use ethers::prelude::signer::SignerMiddlewareError;
 use ethers::prelude::{
@@ -28,7 +28,7 @@ use tokio_stream::StreamExt;
 use super::{ExactlyOracle, Liquidator, MarketAccount, Previewer};
 
 #[cfg(feature = "liquidation-stats")]
-use crate::credit_service::LiquidateFilter;
+use crate::protocol::LiquidateFilter;
 
 const DEFAULT_GAS_PRICE: U256 = math::make_u256(10_000u64);
 
@@ -91,7 +91,7 @@ struct LiquidationIncentive {
 }
 
 // #[derive(Debug)]
-pub struct CreditService<M, S> {
+pub struct Protocol<M, S> {
     client: Arc<SignerMiddleware<M, S>>,
     last_sync: (U64, i128, i128),
     previewer: Previewer<SignerMiddleware<M, S>>,
@@ -109,13 +109,13 @@ pub struct CreditService<M, S> {
     market_weth_address: Address,
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for CreditService<M, S> {
+impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for Protocol<M, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CreditService").finish()
     }
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
+impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
     async fn get_contracts(
         client: Arc<SignerMiddleware<M, S>>,
         config: &Config,
@@ -126,18 +126,18 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         ExactlyOracle<SignerMiddleware<M, S>>,
         Liquidator<SignerMiddleware<M, S>>,
     ) {
-        let (auditor_address, _, deployed_block) = CreditService::<M, S>::parse_abi(&format!(
+        let (auditor_address, _, deployed_block) = Protocol::<M, S>::parse_abi(&format!(
             "node_modules/@exactly-protocol/protocol/deployments/{}/Auditor.json",
             config.chain_id_name
         ));
 
-        let (previewer_address, _, _) = CreditService::<M, S>::parse_abi(&format!(
+        let (previewer_address, _, _) = Protocol::<M, S>::parse_abi(&format!(
             "node_modules/@exactly-protocol/protocol/deployments/{}/Previewer.json",
             config.chain_id_name
         ));
 
         let (liquidator_address, _, _) =
-            CreditService::<M, S>::parse_abi("deployments/rinkeby/Liquidator.json");
+            Protocol::<M, S>::parse_abi("deployments/rinkeby/Liquidator.json");
 
         let auditor = Auditor::new(auditor_address, Arc::clone(&client));
         let previewer = Previewer::new(previewer_address, Arc::clone(&client));
@@ -149,7 +149,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
     pub async fn new(
         client: Arc<SignerMiddleware<M, S>>,
         config: &Config,
-    ) -> Result<CreditService<M, S>> {
+    ) -> Result<Protocol<M, S>> {
         let (deployed_block, auditor, previewer, oracle, liquidator) =
             Self::get_contracts(Arc::clone(&client), &config).await;
 
@@ -177,7 +177,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             config.chain_id_name
         ));
 
-        Ok(CreditService {
+        Ok(Protocol {
             client: Arc::clone(&client),
             last_sync: (U64::from(deployed_block), -1, -1),
             auditor,
@@ -207,7 +207,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         for market in self.markets.values_mut() {
             let address = market.contract.address();
             market.contract =
-                crate::credit_service::market_mod::Market::new(address, Arc::clone(&client));
+                crate::protocol::market_mod::Market::new(address, Arc::clone(&client));
         }
     }
 

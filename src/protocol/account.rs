@@ -10,7 +10,7 @@ use super::{
     WithdrawAtMaturityFilter,
 };
 
-use crate::fixed_point_math::FixedPointMath;
+use super::fixed_point_math::FixedPointMath;
 
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct AccountPosition {

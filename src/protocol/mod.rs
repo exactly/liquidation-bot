@@ -1,12 +1,15 @@
 pub mod account;
-// pub mod credit_manager;
+pub mod config;
+pub mod exactly_events;
 pub mod market;
-pub mod service;
+pub mod protocol;
+
+mod fixed_point_math;
 
 pub use account::*;
-// pub use credit_manager::CreditManager;
+pub use exactly_events::*;
 pub use market::Market;
-pub use service::CreditService;
+pub use protocol::Protocol;
 
 use ethers::prelude::abigen;
 

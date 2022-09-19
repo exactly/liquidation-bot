@@ -4,13 +4,10 @@ use ethers::prelude::k256::ecdsa::SigningKey;
 use ethers::prelude::{Provider, Signer, SignerMiddleware, Wallet, Ws};
 use eyre::Result;
 
-use crate::config::Config;
-use crate::credit_service::CreditService;
+use crate::protocol::config::Config;
+use crate::protocol::Protocol;
 
-mod bindings;
-mod config;
-mod credit_service;
-mod fixed_point_math;
+mod protocol;
 
 async fn create_client(
     config: &Config,
@@ -34,13 +31,12 @@ async fn main() -> Result<()> {
     println!("exactly liquidation bot started!");
 
     let config = Config::default();
-    println!("Address provider: {:?} ", &config.address_provider);
 
     let eth_provider_rpc = config.eth_provider_rpc.clone();
 
     dbg!(&config);
 
-    let mut credit_service: Option<CreditService<Provider<Ws>, Wallet<SigningKey>>> = None;
+    let mut credit_service: Option<Protocol<Provider<Ws>, Wallet<SigningKey>>> = None;
     let mut update_client = false;
     let mut last_client = None;
     loop {
@@ -53,7 +49,7 @@ async fn main() -> Result<()> {
                 }
             } else {
                 println!("CREATING CREDIT SERVICE");
-                credit_service = Some(CreditService::new(Arc::clone(client), &config).await?);
+                credit_service = Some(Protocol::new(Arc::clone(client), &config).await?);
             }
             if let Some(service) = credit_service {
                 credit_service = match service.launch().await {

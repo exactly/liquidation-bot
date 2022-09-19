@@ -6,7 +6,7 @@ use ethers::prelude::{abigen, Middleware, Signer, SignerMiddleware, U256};
 
 use ethers::types::I256;
 
-use crate::fixed_point_math::FixedPointMath;
+use super::fixed_point_math::FixedPointMath;
 
 const INTERVAL: u32 = 4 * 7 * 86_400;
 
@@ -25,7 +25,7 @@ pub struct FixedPool {
 }
 
 pub struct Market<M, S> {
-    pub contract: crate::credit_service::market_mod::Market<SignerMiddleware<M, S>>,
+    pub contract: crate::protocol::market_mod::Market<SignerMiddleware<M, S>>,
     pub interest_rate_model: Address,
     pub oracle_price: U256,
     pub penalty_rate: U256,
@@ -64,7 +64,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> PartialEq for Market<M, S> {
 impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
     pub fn new(address: Address, client: &Arc<SignerMiddleware<M, S>>) -> Self {
         Self {
-            contract: crate::credit_service::market_mod::Market::new(address, Arc::clone(client)),
+            contract: crate::protocol::market_mod::Market::new(address, Arc::clone(client)),
             interest_rate_model: Default::default(),
             oracle_price: Default::default(),
             penalty_rate: Default::default(),

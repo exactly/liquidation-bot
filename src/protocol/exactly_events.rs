@@ -3,7 +3,7 @@ use ethers::{
     prelude::EthLogDecode,
 };
 
-use crate::credit_service::{
+use crate::protocol::{
     auditor_mod::{
         AdminChangedFilter, InitializedFilter, RoleAdminChangedFilter, RoleGrantedFilter,
         RoleRevokedFilter, UpgradedFilter,

@@ -123,12 +123,8 @@ impl FixedPointMath for U256 {
 
 #[cfg(test)]
 mod tests {
-    use ethers::types::U256;
-
-    use crate::fixed_point_math;
-
-    // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
+    use ethers::types::U256;
 
     #[test]
     fn test_ln_wad() {
@@ -139,7 +135,7 @@ mod tests {
     #[test]
     fn test_log_2() {
         let a = U256::from(1024u32);
-        assert_eq!(fixed_point_math::log2(a), U256::from(10u32));
+        assert_eq!(super::log2(a), U256::from(10u32));
     }
 
     #[test]
