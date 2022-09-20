@@ -5,6 +5,7 @@ pub mod market;
 pub mod protocol;
 
 mod fixed_point_math;
+mod liquidation;
 
 pub use account::*;
 pub use exactly_events::*;

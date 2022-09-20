@@ -1,6 +1,7 @@
 use super::config::Config;
 use super::exactly_events::ExactlyEvents;
 use super::fixed_point_math::{math, FixedPointMath};
+use super::liquidation::{Liquidation, Repay};
 use crate::protocol::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
 use ethers::abi::{Tokenizable, Tokenize};
 use ethers::prelude::signer::SignerMiddlewareError;
@@ -11,7 +12,6 @@ use ethers::prelude::{
 };
 use ethers::prelude::{Log, PubsubClient};
 use eyre::Result;
-use serde::Deserialize;
 use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use tokio::time;
 use tokio_stream::StreamExt;
 
-use super::{ExactlyOracle, Liquidator, MarketAccount, Previewer};
+use super::{ExactlyOracle, LiquidationIncentive, Liquidator, MarketAccount, Previewer};
 
 #[cfg(feature = "liquidation-stats")]
 use crate::protocol::LiquidateFilter;
@@ -52,19 +52,6 @@ enum TaskActivity {
     BlockUpdated(Option<U64>),
 }
 
-#[derive(Default, Debug)]
-struct Repay {
-    pub price: U256,
-    pub decimals: u8,
-    pub seize_available: U256,
-    pub seizable_collateral: (U256, Option<Address>),
-    pub market_to_liquidate: (U256, Option<Address>),
-    pub total_collateral: U256,
-    pub adjusted_collateral: U256,
-    pub total_debt: U256,
-    pub adjusted_debt: U256,
-}
-
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
 struct ContractKey {
     address: Address,
@@ -84,12 +71,6 @@ macro_rules! compare {
     };
 }
 
-#[derive(Default, Debug)]
-struct LiquidationIncentive {
-    pub liquidator: u128,
-    pub lenders: u128,
-}
-
 // #[derive(Debug)]
 pub struct Protocol<M, S> {
     client: Arc<SignerMiddleware<M, S>>,
@@ -97,16 +78,21 @@ pub struct Protocol<M, S> {
     previewer: Previewer<SignerMiddleware<M, S>>,
     auditor: Auditor<SignerMiddleware<M, S>>,
     oracle: ExactlyOracle<SignerMiddleware<M, S>>,
-    liquidator: Liquidator<SignerMiddleware<M, S>>,
     markets: HashMap<Address, Market<M, S>>,
     sp_fee_rate: U256,
     accounts: HashMap<Address, Account>,
     contracts_to_listen: HashMap<ContractKey, Address>,
     comparison_enabled: bool,
     liquidation_incentive: LiquidationIncentive,
-    token_pairs: HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
-    tokens: HashSet<Address>,
     market_weth_address: Address,
+    liquidation: Arc<Mutex<Liquidation<M, S>>>,
+    liquidation_sender: Sender<(
+        HashMap<Address, (Account, Repay)>,
+        U256,
+        LiquidationIncentive,
+    )>,
+    token_pairs: Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>>,
+    tokens: Arc<HashSet<Address>>,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for Protocol<M, S> {
@@ -170,12 +156,27 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             (*auditor).address(),
         );
 
-        let (token_pairs, tokens) = parse_token_pairs(&config.token_pairs);
-
         let (market_weth_address, _, _) = Self::parse_abi(&format!(
             "node_modules/@exactly-protocol/protocol/deployments/{}/MarketWETH.json",
             config.chain_id_name
         ));
+
+        let (liquidation_sender, liquidation_receiver) = mpsc::channel(1);
+
+        let liquidation = Arc::new(Mutex::new(Liquidation::new(
+            &config.token_pairs,
+            liquidator,
+        )));
+
+        let liquidation_lock = liquidation.lock().await;
+        let tokens = liquidation_lock.get_tokens();
+        let token_pairs = liquidation_lock.get_token_pairs();
+        drop(liquidation_lock);
+
+        let liquidation_clone = Arc::clone(&liquidation);
+        tokio::spawn(async move {
+            let _ = Liquidation::run(liquidation_clone, liquidation_receiver).await;
+        });
 
         Ok(Protocol {
             client: Arc::clone(&client),
@@ -183,16 +184,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             auditor,
             previewer,
             oracle,
-            liquidator,
             markets,
             sp_fee_rate: U256::zero(),
             accounts: HashMap::new(),
             contracts_to_listen,
             comparison_enabled: config.comparison_enabled,
             liquidation_incentive: Default::default(),
-            token_pairs,
-            tokens,
             market_weth_address,
+            liquidation,
+            liquidation_sender,
+            tokens,
+            token_pairs,
         })
     }
 
@@ -203,7 +205,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         self.auditor = auditor;
         self.previewer = previewer;
         self.oracle = oracle;
-        self.liquidator = liquidator;
+        (*self.liquidation.lock().await).set_liquidator(liquidator);
         for market in self.markets.values_mut() {
             let address = market.contract.address();
             market.contract =
@@ -314,19 +316,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                         first_block = last_block + 1u64;
                         getting_logs = false;
                     } else {
-                        // println!("comparing every {} blocks", PAGE_SIZE);
-                        // let to_timestamp = me
-                        //     .client
-                        //     .provider()
-                        //     .get_block(last_block)
-                        //     .await
-                        //     .unwrap()
-                        //     .unwrap()
-                        //     .timestamp;
-                        // me.compare_accounts(U64::from(last_block), to_timestamp)
-                        //     .await
-                        //     .unwrap();
-
                         first_block = last_block + 1u64;
                         last_block = if first_block + PAGE_SIZE > latest_block {
                             latest_block
@@ -341,29 +330,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                         Ok(mut stream) => {
                             // let mut last_block = U64::zero();
                             while let Some(log) = stream.next().await {
-                                // if let Some(block_number) = log.block_number {
-                                //     if block_number != last_block {
-                                //         if last_block > U64::zero() {
-                                //             let to_timestamp = service
-                                //                 .lock()
-                                //                 .await
-                                //                 .client
-                                //                 .provider()
-                                //                 .get_block(last_block)
-                                //                 .await
-                                //                 .unwrap()
-                                //                 .unwrap()
-                                //                 .timestamp;
-                                //             service
-                                //                 .lock()
-                                //                 .await
-                                //                 .compare_accounts(U64::from(last_block), to_timestamp)
-                                //                 .await
-                                //                 .unwrap();
-                                //         }
-                                //         last_block = block_number;
-                                //     }
-                                // }
                                 let mut me = service.lock().await;
                                 let status = me.handle_log(log, &debounce_tx, &mut writer).await;
                                 match status {
@@ -791,11 +757,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         Ok(LogIterating::NextLog)
     }
 
-    async fn check_liquidations(
-        &mut self,
-        block_number: U64,
-        last_gas_price: &mut U256,
-    ) -> Result<()> {
+    async fn check_liquidations(&self, block_number: U64, last_gas_price: &mut U256) -> Result<()> {
         println!("check_liquidations");
         let block = self
             .client
@@ -804,7 +766,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             .await?
             .unwrap();
         *last_gas_price =
-            block.base_fee_per_gas.unwrap_or(*last_gas_price) + U256::from(1_500_000_000);
+            block.base_fee_per_gas.unwrap_or(*last_gas_price) + U256::from(1_500_000_000u128);
 
         let to_timestamp = block.timestamp;
 
@@ -819,8 +781,18 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             let hf = Self::compute_hf(&self.markets, account, to_timestamp);
             if let Ok((hf, _, _, repay)) = hf {
                 if hf < math::WAD && repay.adjusted_debt != U256::zero() {
-                    liquidations_counter += 1;
-                    liquidations.insert(address.clone(), (account.clone(), repay));
+                    let (profitable, _, _, _) = Liquidation::<M, S>::is_profitable(
+                        &repay,
+                        &self.liquidation_incentive,
+                        *last_gas_price,
+                        self.markets[&self.market_weth_address].oracle_price,
+                        &self.token_pairs,
+                        &self.tokens,
+                    );
+                    if profitable {
+                        liquidations_counter += 1;
+                        liquidations.insert(address.clone(), (account.clone(), repay));
+                    }
                 }
             }
         }
@@ -829,7 +801,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             self.accounts.len()
         );
         println!("accounts to liquidate {:#?}", liquidations_counter);
-        self.liquidate(&liquidations, *last_gas_price).await?;
+        self.liquidation_sender
+            .send((
+                liquidations,
+                *last_gas_price,
+                self.liquidation_incentive.clone(),
+            ))
+            .await?;
         Ok(())
     }
 
@@ -990,73 +968,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             gas_cost,
             gas_price
         ))?;
-        Ok(())
-    }
-
-    async fn liquidate(
-        &self,
-        liquidations: &HashMap<Address, (Account, Repay)>,
-        last_gas_price: U256,
-    ) -> Result<()> {
-        for (_, (account, repay)) in liquidations {
-            println!("Liquidating account {:?}", account);
-            if let Some(address) = &repay.market_to_liquidate.1 {
-                let max_repay =
-                    Self::max_repay_assets(repay, &self.liquidation_incentive, U256::MAX)
-                        .mul_wad_down(math::WAD + U256::exp10(14))
-                        + math::WAD.mul_div_up(U256::exp10(repay.decimals as usize), repay.price);
-                let (pool_pair, fee): (Address, u32) =
-                    self.get_flash_pair(*address, repay.seizable_collateral.1.unwrap(), max_repay);
-
-                let profit = Self::max_profit(repay, max_repay, &self.liquidation_incentive);
-                let cost = Self::max_cost(
-                    repay,
-                    max_repay,
-                    &self.liquidation_incentive,
-                    U256::from(fee),
-                    last_gas_price,
-                    U256::from(1500u128),
-                    self.markets[&self.market_weth_address].oracle_price,
-                );
-                if profit < cost || profit - cost < math::WAD / U256::exp10(16) {
-                    println!("not profitable to liquidate");
-                    println!("profit: {:?}", profit);
-                    println!("cost  : {:?}", cost);
-                    println!(
-                        "repay$: {:?}",
-                        max_repay.mul_div_up(repay.price, U256::exp10(repay.decimals as usize))
-                    );
-                    continue;
-                }
-
-                println!("Liquidating on market {:#?}", address);
-                println!(
-                    "seizing                    {:#?}",
-                    repay.seizable_collateral.1.unwrap()
-                );
-
-                // liquidate using liquidator contract
-                let func = self
-                    .liquidator
-                    .liquidate(
-                        *address,
-                        repay.seizable_collateral.1.unwrap(),
-                        account.address,
-                        max_repay,
-                        pool_pair,
-                        fee,
-                    )
-                    .gas(6_666_666);
-
-                let tx = func.send().await;
-                println!("tx: {:?}", &tx);
-                let tx = tx?;
-                println!("waiting receipt");
-                let receipt = tx.confirmations(1).await?;
-                println!("Liquidation tx {:?}", receipt);
-            }
-        }
-        println!("done liquidating");
         Ok(())
     }
 
@@ -1440,9 +1351,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     .mul_div_down(market.oracle_price, U256::exp10(market.decimals as usize));
                 total_collateral += value;
                 adjusted_collateral += value.mul_wad_down(market.adjust_factor);
-                if value > repay.seizable_collateral.0 {
+                if value >= repay.seize_available {
                     repay.seize_available = value;
-                    repay.seizable_collateral = (value, Some(*market_address));
+                    repay.seizable_collateral = Some(*market_address);
                 }
             }
             let mut current_debt = U256::zero();
@@ -1461,17 +1372,21 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 current_debt.mul_div_up(market.oracle_price, U256::exp10(market.decimals as usize));
             total_debt += value;
             adjusted_debt += value.div_wad_up(market.adjust_factor);
-
-            if value > repay.market_to_liquidate.0 {
+            if value >= repay.market_to_liquidate_debt {
                 repay.price = market.oracle_price;
                 repay.decimals = market.decimals;
-                repay.market_to_liquidate = (value, Some(*market_address));
+                repay.market_to_liquidate_debt = value;
+                repay.market_to_liquidate = Some(*market_address);
             }
         }
         repay.total_collateral = total_collateral;
         repay.adjusted_collateral = adjusted_collateral;
         repay.total_debt = total_debt;
         repay.adjusted_debt = adjusted_debt;
+        repay.repay_asset_address = markets[&repay.market_to_liquidate.unwrap()].asset;
+        if let Some(seizable_collateral) = &repay.seizable_collateral {
+            repay.collateral_asset_address = markets[seizable_collateral].asset;
+        }
         let hf = if adjusted_debt == U256::zero() {
             adjusted_collateral
         } else {
@@ -1485,188 +1400,5 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             println!("Health factor {:?}\n", hf);
         }
         Ok((hf, adjusted_collateral, adjusted_debt, repay))
-    }
-
-    fn calculate_close_factor(repay: &Repay, liquidation_incentive: &LiquidationIncentive) -> U256 {
-        let target_health = U256::exp10(16usize) * 125u32;
-        let adjust_factor = repay
-            .adjusted_collateral
-            .div_wad_up(repay.total_collateral)
-            .mul_wad_up(repay.total_debt.div_wad_up(repay.adjusted_debt));
-        let close_factor = (target_health
-            - repay.adjusted_collateral.div_wad_up(repay.adjusted_debt))
-        .div_wad_up(
-            target_health
-                - adjust_factor.mul_wad_down(
-                    math::WAD + liquidation_incentive.liquidator + liquidation_incentive.lenders,
-                ),
-        );
-        close_factor
-    }
-
-    fn max_repay_assets(
-        repay: &Repay,
-        liquidation_incentive: &LiquidationIncentive,
-        max_liquidator_assets: U256,
-    ) -> U256 {
-        let close_factor = Self::calculate_close_factor(repay, liquidation_incentive);
-        U256::min(
-            U256::min(
-                repay
-                    .total_debt
-                    .mul_wad_up(U256::min(math::WAD, close_factor)),
-                repay.seize_available.div_wad_up(
-                    math::WAD + liquidation_incentive.liquidator + liquidation_incentive.lenders,
-                ),
-            )
-            .mul_div_up(U256::exp10(repay.decimals as usize), repay.price),
-            if max_liquidator_assets
-                < U256::from_str("115792089237316195423570985008687907853269984665640564039457") //// U256::MAX / WAD
-                    .unwrap()
-            {
-                max_liquidator_assets.div_wad_down(math::WAD + liquidation_incentive.lenders)
-            } else {
-                max_liquidator_assets
-            },
-        )
-    }
-
-    fn max_profit(
-        repay: &Repay,
-        max_repay: U256,
-        liquidation_incentive: &LiquidationIncentive,
-    ) -> U256 {
-        max_repay
-            .mul_div_up(repay.price, U256::exp10(repay.decimals as usize))
-            .mul_wad_down(U256::from(
-                liquidation_incentive.liquidator + liquidation_incentive.lenders,
-            ))
-    }
-
-    fn max_cost(
-        repay: &Repay,
-        max_repay: U256,
-        liquidation_incentive: &LiquidationIncentive,
-        swap_fee: U256,
-        gas_price: U256,
-        gas_cost: U256,
-        eth_price: U256,
-    ) -> U256 {
-        let max_repay = max_repay.mul_div_down(repay.price, U256::exp10(repay.decimals as usize));
-        max_repay.mul_wad_down(U256::from(liquidation_incentive.lenders))
-            + max_repay.mul_wad_down(swap_fee * U256::from(U256::exp10(12)))
-            + (gas_price * gas_cost).mul_wad_down(eth_price)
-    }
-
-    fn get_flash_pair(
-        &self,
-        repay: Address,
-        collateral: Address,
-        _max_repay_assets: U256,
-    ) -> (Address, u32) {
-        // shadowing repay and collateral with underlying assets
-        let repay = self.markets[&repay].asset;
-        let collateral = self.markets[&collateral].asset;
-
-        let mut lowest_fee = u32::MAX;
-        let mut pair_contract = Address::zero();
-
-        if collateral != repay {
-            if let Some(pair) = self.token_pairs.get(&ordered_addresses(collateral, repay)) {
-                return (collateral, pair.peek().unwrap().0);
-            }
-            return (collateral, 0);
-        }
-
-        for token in &self.tokens {
-            if *token != collateral {
-                if let Some(pair) = self.token_pairs.get(&ordered_addresses(*token, collateral)) {
-                    if let Some(rate) = pair.peek() {
-                        if rate.0 < lowest_fee {
-                            lowest_fee = rate.0;
-                            pair_contract = *token;
-                        }
-                    }
-                }
-            }
-        }
-        (pair_contract, lowest_fee)
-    }
-}
-
-fn ordered_addresses(token0: Address, token1: Address) -> (Address, Address) {
-    if token0 < token1 {
-        (token0, token1)
-    } else {
-        (token1, token0)
-    }
-}
-
-#[derive(Deserialize, Debug)]
-pub struct TokenPair {
-    pub token0: String,
-    pub token1: String,
-    pub fee: u32,
-}
-
-fn parse_token_pairs(
-    token_pairs: &str,
-) -> (
-    HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
-    HashSet<Address>,
-) {
-    let mut tokens = HashSet::new();
-    let json_pairs: Vec<(String, String, u32)> = serde_json::from_str(token_pairs).unwrap();
-    let mut pairs = HashMap::new();
-    for (token0, token1, fee) in json_pairs {
-        let token0 = Address::from_str(&token0).unwrap();
-        let token1 = Address::from_str(&token1).unwrap();
-        tokens.insert(token0);
-        tokens.insert(token1);
-        pairs
-            .entry(ordered_addresses(token0, token1))
-            .or_insert(BinaryHeap::new())
-            .push(Reverse(fee));
-    }
-    (pairs, tokens)
-}
-#[cfg(test)]
-mod services_test {
-
-    // Note this useful idiom: importing names from outer (for mod tests) scope.
-    use super::*;
-
-    #[test]
-    fn test_parse_token_pairs() {
-        let tokens = r#"[[
-                            "0x0000000000000000000000000000000000000000", 
-                            "0x0000000000000000000000000000000000000001", 
-                            3000
-                          ],
-                          [
-                            "0x0000000000000000000000000000000000000000", 
-                            "0x0000000000000000000000000000000000000001", 
-                            1000
-                          ],
-                          [
-                            "0x0000000000000000000000000000000000000000", 
-                            "0x0000000000000000000000000000000000000001", 
-                            2000
-                          ]]"#;
-        let (pairs, _) = parse_token_pairs(tokens);
-        assert_eq!(
-            pairs
-                .get(
-                    &(ordered_addresses(
-                        Address::from_str(&"0x0000000000000000000000000000000000000001").unwrap(),
-                        Address::from_str(&"0x0000000000000000000000000000000000000000").unwrap()
-                    ))
-                )
-                .unwrap()
-                .peek()
-                .unwrap()
-                .0,
-            1000
-        );
     }
 }
