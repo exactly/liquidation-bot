@@ -239,6 +239,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                 max_liquidator_assets
             },
         )
+        .min(repay.market_to_liquidate_debt)
     }
 
     fn max_profit(
