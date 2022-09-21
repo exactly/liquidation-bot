@@ -817,7 +817,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
     ) -> Result<()> {
         use ethers::types::{Block, TransactionReceipt, H256};
         use futures::TryFutureExt;
-        use std::io::Write;
+        use std::{collections::BTreeMap, io::Write};
 
         let mut previous_multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
@@ -876,7 +876,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         let timestamp = current_block_data.timestamp;
         let receipt = receipt.unwrap();
         let gas_cost = receipt.gas_used.unwrap();
-        let gas_price = gas_cost * receipt.effective_gas_price.unwrap();
+        let gas_price = gas_cost
+            * receipt
+                .effective_gas_price
+                .unwrap()
+                .mul_wad_down(self.markets[&self.market_weth_address].oracle_price);
 
         let market_prices: HashMap<Address, U256> = self
             .markets
@@ -897,7 +901,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
 
         let mut total_debt = U256::zero();
         let mut total_collateral = U256::zero();
+        let mut total_supply_per_market = BTreeMap::new();
         for market_account in previous_market_account {
+            let total_float_supply = market_account.total_floating_deposit_assets;
             if market_account.is_collateral {
                 total_collateral += market_account.floating_deposit_assets.mul_div_down(
                     market_prices[&market_account.market],
@@ -905,6 +911,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 )
             };
 
+            let mut total_fixed_supply = U256::zero();
+            for fixed_pool in market_account.fixed_pools {
+                total_fixed_supply += fixed_pool.supplied;
+            }
             let mut market_debt = U256::zero();
             for fixed_position in market_account.fixed_borrow_positions {
                 let borrowed = fixed_position.position.principal + fixed_position.position.fee;
@@ -920,6 +930,22 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             total_debt += market_debt.mul_div_up(
                 market_prices[&market_account.market],
                 U256::exp10(market_account.decimals as usize),
+            );
+            total_supply_per_market.insert(
+                market_account.market,
+                (
+                    market_account.asset_symbol,
+                    (
+                        total_float_supply.mul_div_down(
+                            market_prices[&market_account.market],
+                            U256::exp10(market_account.decimals as usize),
+                        ),
+                        (total_float_supply + total_fixed_supply).mul_div_down(
+                            market_prices[&market_account.market],
+                            U256::exp10(market_account.decimals as usize),
+                        ),
+                    ),
+                ),
             );
         }
 
@@ -937,7 +963,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             ..Default::default()
         };
 
-        let close_factor = Self::calculate_close_factor(&repay, &previous_liquidation_incentive);
+        let close_factor =
+            Liquidation::<M, S>::calculate_close_factor(&repay, &previous_liquidation_incentive);
         let current_hf = if current_adjusted_debt > U256::zero() {
             current_adjusted_collateral.div_wad_down(current_adjusted_debt)
         } else {
@@ -950,7 +977,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         };
         let liquidators_fee = data.seized_assets * U256::from(previous_liquidator);
         writer.write_fmt(format_args!(
-            "{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?}\n",
+            "{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?},{:#?}",
             timestamp,
             data.borrower,
             total_collateral,
@@ -965,6 +992,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             gas_cost,
             gas_price
         ))?;
+        for (_, (symbol, supply)) in total_supply_per_market {
+            writer.write_fmt(format_args!(
+                ",{:#?},{:#?},{:#?}",
+                symbol, supply.0, supply.1
+            ))?;
+        }
+        writer.write_fmt(format_args!("\n"))?;
         Ok(())
     }
 

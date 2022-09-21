@@ -275,7 +275,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             + (gas_price * gas_cost).mul_wad_down(eth_price)
     }
 
-    fn calculate_close_factor(repay: &Repay, liquidation_incentive: &LiquidationIncentive) -> U256 {
+    pub fn calculate_close_factor(
+        repay: &Repay,
+        liquidation_incentive: &LiquidationIncentive,
+    ) -> U256 {
         let target_health = U256::exp10(16usize) * 125u32;
         let adjust_factor = repay
             .adjusted_collateral
