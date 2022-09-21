@@ -29,6 +29,14 @@ pub struct Repay {
     pub market_to_liquidate_debt: U256,
 }
 
+#[derive(Default, Debug)]
+pub struct LiquidationData {
+    pub liquidations: HashMap<Address, (Account, Repay)>,
+    pub eth_price: U256,
+    pub gas_price: U256,
+    pub liquidation_incentive: LiquidationIncentive,
+}
+
 pub struct Liquidation<M, S> {
     token_pairs: Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>>,
     tokens: Arc<HashSet<Address>>,
@@ -57,24 +65,22 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
 
     pub async fn run(
         this: Arc<Mutex<Self>>,
-        mut receiver: Receiver<(
-            HashMap<Address, (Account, Repay)>,
-            U256,
-            LiquidationIncentive,
-        )>,
+        mut receiver: Receiver<LiquidationData>,
     ) -> Result<()> {
         let mut liquidations;
         let mut liquidations_iter = None;
         let mut eth_price = U256::zero();
+        let mut gas_price = U256::zero();
         let mut liquidation_incentive = None;
         let d = Duration::from_millis(1);
         loop {
             match time::timeout(d, receiver.recv()).await {
                 Ok(Some(data)) => {
-                    liquidations = data.0;
+                    liquidations = data.liquidations;
                     liquidations_iter = Some(liquidations.iter());
-                    eth_price = data.1;
-                    liquidation_incentive = Some(data.2);
+                    eth_price = data.eth_price;
+                    gas_price = data.gas_price;
+                    liquidation_incentive = Some(data.liquidation_incentive);
                 }
                 Ok(None) => {}
                 Err(_) => {
@@ -86,7 +92,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                                     account,
                                     repay,
                                     liquidation_incentive.as_ref().unwrap(),
-                                    0u8.into(),
+                                    gas_price,
                                     eth_price,
                                 )
                                 .await?;

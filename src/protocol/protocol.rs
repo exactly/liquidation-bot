@@ -1,7 +1,7 @@
 use super::config::Config;
 use super::exactly_events::ExactlyEvents;
 use super::fixed_point_math::{math, FixedPointMath};
-use super::liquidation::{Liquidation, Repay};
+use super::liquidation::{Liquidation, LiquidationData, Repay};
 use crate::protocol::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
 use ethers::abi::{Tokenizable, Tokenize};
 use ethers::prelude::signer::SignerMiddlewareError;
@@ -86,11 +86,7 @@ pub struct Protocol<M, S> {
     liquidation_incentive: LiquidationIncentive,
     market_weth_address: Address,
     liquidation: Arc<Mutex<Liquidation<M, S>>>,
-    liquidation_sender: Sender<(
-        HashMap<Address, (Account, Repay)>,
-        U256,
-        LiquidationIncentive,
-    )>,
+    liquidation_sender: Sender<LiquidationData>,
     token_pairs: Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>>,
     tokens: Arc<HashSet<Address>>,
 }
@@ -802,11 +798,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         );
         println!("accounts to liquidate {:#?}", liquidations_counter);
         self.liquidation_sender
-            .send((
-                liquidations,
-                *last_gas_price,
-                self.liquidation_incentive.clone(),
-            ))
+            .send(LiquidationData {
+                liquidations: liquidations,
+                eth_price: self.markets[&self.market_weth_address].oracle_price,
+                gas_price: *last_gas_price,
+                liquidation_incentive: self.liquidation_incentive.clone(),
+            })
             .await?;
         Ok(())
     }
