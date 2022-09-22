@@ -2,6 +2,7 @@ use super::config::Config;
 use super::exactly_events::ExactlyEvents;
 use super::fixed_point_math::{math, FixedPointMath};
 use super::liquidation::{Liquidation, LiquidationData, Repay};
+use crate::protocol::liquidation::LiquidationAction;
 use crate::protocol::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
 use ethers::abi::{Tokenizable, Tokenize};
 use ethers::prelude::signer::SignerMiddlewareError;
@@ -49,7 +50,8 @@ enum LogIterating {
 enum TaskActivity {
     StartCheckLiquidation,
     StopCheckLiquidation,
-    BlockUpdated(Option<U64>),
+    UpdateAll(Option<U64>),
+    UpdateUser((Option<U64>, Address)),
 }
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
@@ -223,15 +225,22 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             let mut check_liquidations = false;
             let mut liquidation_checked = false;
             let mut last_gas_price = DEFAULT_GAS_PRICE;
+            let mut user = None;
             loop {
                 let d = Duration::from_millis(2_000);
                 match time::timeout(d, debounce_rx.recv()).await {
                     Ok(Some(activity)) => match activity {
                         TaskActivity::StartCheckLiquidation => check_liquidations = true,
                         TaskActivity::StopCheckLiquidation => check_liquidations = false,
-                        TaskActivity::BlockUpdated(block) => {
+                        TaskActivity::UpdateAll(block) => {
                             block_number = block;
                             liquidation_checked = false;
+                            user = None;
+                        }
+                        TaskActivity::UpdateUser((block, user_to_check)) => {
+                            block_number = block;
+                            liquidation_checked = false;
+                            user = Some(user_to_check);
                         }
                     },
                     Ok(None) => {}
@@ -241,7 +250,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                                 let lock = me
                                     .lock()
                                     .await
-                                    .check_liquidations(block, &mut last_gas_price)
+                                    .check_liquidations(block, &mut last_gas_price, user)
                                     .await;
                                 liquidation_checked = true;
                                 drop(lock);
@@ -437,7 +446,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     meta.log_index.as_u128() as i128,
                 );
                 sender
-                    .send(TaskActivity::BlockUpdated(log.block_number))
+                    .send(TaskActivity::UpdateAll(log.block_number))
                     .await?;
                 return Ok(LogIterating::UpdateFilters);
             }
@@ -600,9 +609,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     .or_insert_with(|| Account::new(data.borrower, &self.markets))
                     .repay_at_maturity(&data, &meta.address);
             }
-            ExactlyEvents::LiquidateFilter(_data) => {
+            ExactlyEvents::LiquidateFilter(data) => {
                 #[cfg(feature = "liquidation-stats")]
-                self.handle_liquidate_event(&meta, &_data, _writer).await?;
+                self.handle_liquidate_event(&meta, &data, _writer).await?;
+
+                sender
+                    .send(TaskActivity::UpdateUser((log.block_number, data.borrower)))
+                    .await?;
+                return Ok(LogIterating::NextLog);
             }
             ExactlyEvents::SeizeFilter(data) => {
                 self.accounts
@@ -666,7 +680,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     meta.log_index.as_u128() as i128,
                 );
                 sender
-                    .send(TaskActivity::BlockUpdated(log.block_number))
+                    .send(TaskActivity::UpdateAll(log.block_number))
                     .await?;
                 return Ok(LogIterating::UpdateFilters);
             }
@@ -748,12 +762,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             }
         }
         sender
-            .send(TaskActivity::BlockUpdated(log.block_number))
+            .send(TaskActivity::UpdateAll(log.block_number))
             .await?;
         Ok(LogIterating::NextLog)
     }
 
-    async fn check_liquidations(&self, block_number: U64, last_gas_price: &mut U256) -> Result<()> {
+    async fn check_liquidations(
+        &self,
+        block_number: U64,
+        last_gas_price: &mut U256,
+        user: Option<Address>,
+    ) -> Result<()> {
         println!("check_liquidations");
         let block = self
             .client
@@ -773,23 +792,26 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
 
         let mut liquidations: HashMap<Address, (Account, Repay)> = HashMap::new();
         let mut liquidations_counter = 0;
-        for (address, account) in self.accounts.iter() {
-            let hf = Self::compute_hf(&self.markets, account, to_timestamp);
-            if let Ok((hf, _, _, repay)) = hf {
-                if hf < math::WAD && repay.adjusted_debt != U256::zero() {
-                    let (profitable, _, _, _) = Liquidation::<M, S>::is_profitable(
-                        &repay,
-                        &self.liquidation_incentive,
-                        *last_gas_price,
-                        self.markets[&self.market_weth_address].oracle_price,
-                        &self.token_pairs,
-                        &self.tokens,
-                    );
-                    if profitable {
-                        liquidations_counter += 1;
-                        liquidations.insert(address.clone(), (account.clone(), repay));
-                    }
-                }
+        if let Some(address) = &user {
+            let account = &self.accounts[address];
+            self.check_liquidations_on_account(
+                address,
+                account,
+                to_timestamp,
+                last_gas_price,
+                &mut liquidations_counter,
+                &mut liquidations,
+            );
+        } else {
+            for (address, account) in &self.accounts {
+                self.check_liquidations_on_account(
+                    address,
+                    account,
+                    to_timestamp,
+                    last_gas_price,
+                    &mut liquidations_counter,
+                    &mut liquidations,
+                );
             }
         }
         println!(
@@ -797,15 +819,50 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             self.accounts.len()
         );
         println!("accounts to liquidate {:#?}", liquidations_counter);
-        self.liquidation_sender
-            .send(LiquidationData {
-                liquidations: liquidations,
-                eth_price: self.markets[&self.market_weth_address].oracle_price,
-                gas_price: *last_gas_price,
-                liquidation_incentive: self.liquidation_incentive.clone(),
-            })
-            .await?;
+        if liquidations.len() > 0 {
+            self.liquidation_sender
+                .send(LiquidationData {
+                    liquidations: liquidations,
+                    eth_price: self.markets[&self.market_weth_address].oracle_price,
+                    gas_price: *last_gas_price,
+                    liquidation_incentive: self.liquidation_incentive.clone(),
+                    action: if user == None {
+                        LiquidationAction::Update
+                    } else {
+                        LiquidationAction::Insert
+                    },
+                })
+                .await?;
+        }
         Ok(())
+    }
+
+    fn check_liquidations_on_account(
+        &self,
+        address: &Address,
+        account: &Account,
+        to_timestamp: U256,
+        last_gas_price: &U256,
+        liquidations_counter: &mut i32,
+        liquidations: &mut HashMap<Address, (Account, Repay)>,
+    ) {
+        let hf = Self::compute_hf(&self.markets, account, to_timestamp);
+        if let Ok((hf, _, _, repay)) = hf {
+            if hf < math::WAD && repay.adjusted_debt != U256::zero() {
+                let (profitable, _, _, _) = Liquidation::<M, S>::is_profitable(
+                    &repay,
+                    &self.liquidation_incentive,
+                    *last_gas_price,
+                    self.markets[&self.market_weth_address].oracle_price,
+                    &self.token_pairs,
+                    &self.tokens,
+                );
+                if profitable {
+                    *liquidations_counter += 1;
+                    liquidations.insert(address.clone(), (account.clone(), repay));
+                }
+            }
+        }
     }
 
     #[cfg(feature = "liquidation-stats")]

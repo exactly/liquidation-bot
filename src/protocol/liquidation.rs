@@ -29,12 +29,25 @@ pub struct Repay {
     pub market_to_liquidate_debt: U256,
 }
 
+#[derive(Debug)]
+pub enum LiquidationAction {
+    Update,
+    Insert,
+}
+
+impl Default for LiquidationAction {
+    fn default() -> Self {
+        LiquidationAction::Update
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct LiquidationData {
     pub liquidations: HashMap<Address, (Account, Repay)>,
     pub eth_price: U256,
     pub gas_price: U256,
     pub liquidation_incentive: LiquidationIncentive,
+    pub action: LiquidationAction,
 }
 
 pub struct Liquidation<M, S> {
@@ -67,7 +80,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         this: Arc<Mutex<Self>>,
         mut receiver: Receiver<LiquidationData>,
     ) -> Result<()> {
-        let mut liquidations;
+        let mut liquidations = HashMap::new();
         let mut liquidations_iter = None;
         let mut eth_price = U256::zero();
         let mut gas_price = U256::zero();
@@ -76,7 +89,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         loop {
             match time::timeout(d, receiver.recv()).await {
                 Ok(Some(data)) => {
-                    liquidations = data.liquidations;
+                    match data.action {
+                        LiquidationAction::Update => {
+                            liquidations = data.liquidations;
+                        }
+                        LiquidationAction::Insert => {
+                            let mut new_liquidations = data.liquidations;
+                            for (k, v) in new_liquidations.drain() {
+                                liquidations.insert(k, v);
+                            }
+                        }
+                    }
                     liquidations_iter = Some(liquidations.iter());
                     eth_price = data.eth_price;
                     gas_price = data.gas_price;
