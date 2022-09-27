@@ -1,17 +1,20 @@
 use super::fixed_point_math::{math, FixedPointMath};
-use ethers::prelude::{Address, Middleware, Signer, SignerMiddleware, U256};
+use ethers::prelude::{Address, Middleware, Multicall, Signer, SignerMiddleware, U256};
 use eyre::Result;
 use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::SystemTime;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
 use tokio::time;
 
-use super::{Account, LiquidationIncentive, Liquidator};
+use super::{
+    Account, Auditor, ExactlyOracle, LiquidationIncentive, Liquidator, MarketAccount, Previewer,
+};
 
 #[derive(Default, Debug)]
 pub struct Repay {
@@ -48,23 +51,41 @@ pub struct LiquidationData {
     pub gas_price: U256,
     pub liquidation_incentive: LiquidationIncentive,
     pub action: LiquidationAction,
+    pub markets: Vec<Address>,
+    pub assets: HashMap<Address, Address>,
+    pub oracle: Address,
 }
 
 pub struct Liquidation<M, S> {
+    pub client: Arc<SignerMiddleware<M, S>>,
     token_pairs: Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>>,
     tokens: Arc<HashSet<Address>>,
     liquidator: Liquidator<SignerMiddleware<M, S>>,
+    previewer: Previewer<SignerMiddleware<M, S>>,
+    auditor: Auditor<SignerMiddleware<M, S>>,
+    market_weth_address: Address,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
-    pub fn new(token_pairs: &str, liquidator: Liquidator<SignerMiddleware<M, S>>) -> Self {
+    pub fn new(
+        client: Arc<SignerMiddleware<M, S>>,
+        token_pairs: &str,
+        liquidator: Liquidator<SignerMiddleware<M, S>>,
+        previewer: Previewer<SignerMiddleware<M, S>>,
+        auditor: Auditor<SignerMiddleware<M, S>>,
+        weth_address: Address,
+    ) -> Self {
         let (token_pairs, tokens) = parse_token_pairs(token_pairs);
         let token_pairs = Arc::new(token_pairs);
         let tokens = Arc::new(tokens);
         Self {
+            client,
             token_pairs,
             tokens,
             liquidator,
+            previewer,
+            auditor,
+            market_weth_address: weth_address,
         }
     }
 
@@ -85,6 +106,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         let mut eth_price = U256::zero();
         let mut gas_price = U256::zero();
         let mut liquidation_incentive = None;
+        let mut markets = Vec::new();
+        let mut oracle = None;
+        let mut assets = HashMap::new();
         let d = Duration::from_millis(1);
         loop {
             match time::timeout(d, receiver.recv()).await {
@@ -104,6 +128,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                     eth_price = data.eth_price;
                     gas_price = data.gas_price;
                     liquidation_incentive = Some(data.liquidation_incentive);
+                    markets = data.markets;
+                    // ExactlyOracle<SignerMiddleware<M, S>>,
+                    oracle = Some(ExactlyOracle::new(
+                        data.oracle,
+                        Arc::clone(&this.lock().await.client),
+                    ));
+                    assets = data.assets;
                 }
                 Ok(None) => {}
                 Err(_) => {
@@ -117,8 +148,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                                     liquidation_incentive.as_ref().unwrap(),
                                     gas_price,
                                     eth_price,
+                                    &markets,
+                                    oracle.as_ref().unwrap(),
+                                    &assets,
                                 )
                                 .await?;
+                        } else {
+                            liquidations_iter = None;
                         }
                     }
                 }
@@ -130,20 +166,23 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         &self,
         account: &Account,
         repay: &Repay,
-        liquidation_incentive: &LiquidationIncentive,
+        _liquidation_incentive: &LiquidationIncentive,
         last_gas_price: U256,
-        eth_price: U256,
+        _eth_price: U256,
+        markets: &Vec<Address>,
+        oracle: &ExactlyOracle<SignerMiddleware<M, S>>,
+        assets: &HashMap<Address, Address>,
     ) -> Result<()> {
         println!("Liquidating account {:?}", account);
         if let Some(address) = &repay.market_to_liquidate {
-            let (profitable, max_repay, pool_pair, fee) = Self::is_profitable(
-                repay,
-                liquidation_incentive,
-                last_gas_price,
-                eth_price,
-                &self.token_pairs,
-                &self.tokens,
-            );
+            let response = self
+                .is_profitable_async(account.address, last_gas_price, markets, oracle, assets)
+                .await;
+
+            let (profitable, max_repay, pool_pair, fee) = match response {
+                Some(response) => response,
+                None => return Ok(()),
+            };
 
             if !profitable {
                 println!("not profitable to liquidate");
@@ -184,6 +223,128 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         Ok(())
     }
 
+    pub async fn is_profitable_async(
+        &self,
+        account: Address,
+        last_gas_price: U256,
+        markets: &Vec<Address>,
+        oracle: &ExactlyOracle<SignerMiddleware<M, S>>,
+        assets: &HashMap<Address, Address>,
+    ) -> Option<(bool, U256, Address, u32)> {
+        let mut multicall =
+            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
+                .await
+                .unwrap();
+        multicall.add_call(self.previewer.exactly(account));
+        multicall.add_call(
+            self.auditor
+                .account_liquidity(account, Address::zero(), U256::zero()),
+        );
+        multicall.add_call(self.auditor.liquidation_incentive());
+
+        let mut price_multicall =
+            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
+                .await
+                .unwrap();
+        for market in markets {
+            price_multicall.add_call(oracle.asset_price(*market));
+        }
+
+        let response = tokio::try_join!(multicall.call(), price_multicall.call_raw());
+
+        let (data, prices) = if let Ok(response) = response {
+            response
+        } else {
+            return None;
+        };
+
+        let (market_account, (adjusted_collateral, adjusted_debt), liquidation_incentive): (
+            Vec<MarketAccount>,
+            (U256, U256),
+            LiquidationIncentive,
+        ) = data;
+
+        let prices: HashMap<Address, U256> = markets
+            .iter()
+            .zip(prices)
+            .map(|(market, price)| (*market, price.into_uint().unwrap()))
+            .collect();
+
+        if adjusted_debt.is_zero() {
+            return None;
+        }
+        let hf = adjusted_collateral.div_wad_down(adjusted_debt);
+        if hf > math::WAD {
+            return None;
+        }
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let repay = Self::pick_markets(&market_account, &prices, timestamp.into(), assets);
+        Self::is_profitable(
+            &repay,
+            &liquidation_incentive,
+            last_gas_price,
+            prices[&self.market_weth_address],
+            &self.token_pairs,
+            &self.tokens,
+        )
+    }
+
+    pub fn pick_markets(
+        market_account: &Vec<MarketAccount>,
+        prices: &HashMap<Address, U256>,
+        timestamp: U256,
+        assets: &HashMap<Address, Address>,
+    ) -> Repay {
+        let mut repay = Repay::default();
+        for market in market_account {
+            if market.is_collateral {
+                let collateral_value = market.floating_deposit_assets.mul_div_down(
+                    prices[&market.market],
+                    U256::exp10(market.decimals as usize),
+                );
+                let adjusted_collateral =
+                    collateral_value.mul_wad_down(market.adjust_factor.into());
+                repay.total_collateral += collateral_value;
+                repay.adjusted_collateral += adjusted_collateral;
+                if adjusted_collateral >= repay.seize_available {
+                    repay.seize_available = adjusted_collateral;
+                    repay.seizable_collateral = Some(market.market);
+                    repay.collateral_asset_address = assets[&market.market];
+                }
+            };
+            let mut market_debt_assets = U256::zero();
+            for fixed_position in &market.fixed_borrow_positions {
+                let borrowed = fixed_position.position.principal + fixed_position.position.fee;
+                market_debt_assets += borrowed;
+                if U256::from(fixed_position.maturity) < timestamp {
+                    market_debt_assets += borrowed.mul_wad_down(
+                        (timestamp - U256::from(fixed_position.maturity))
+                            * U256::from(market.penalty_rate),
+                    )
+                }
+            }
+            market_debt_assets += market.floating_borrow_assets;
+            let market_debt_value = market_debt_assets.mul_div_up(
+                prices[&market.market],
+                U256::exp10(market.decimals as usize),
+            );
+            let adjusted_debt = market_debt_value.div_wad_up(market.adjust_factor.into());
+            repay.total_debt += market_debt_value;
+            repay.adjusted_debt += adjusted_debt;
+            if adjusted_debt >= repay.market_to_liquidate_debt {
+                repay.market_to_liquidate_debt = adjusted_debt;
+                repay.market_to_liquidate = Some(market.market);
+                repay.price = prices[&market.market];
+                repay.decimals = market.decimals;
+                repay.repay_asset_address = assets[&market.market];
+            }
+        }
+        repay
+    }
+
     pub fn is_profitable(
         repay: &Repay,
         liquidation_incentive: &LiquidationIncentive,
@@ -191,7 +352,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         eth_price: U256,
         token_pairs: &HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
         tokens: &HashSet<Address>,
-    ) -> (bool, U256, Address, u32) {
+    ) -> Option<(bool, U256, Address, u32)> {
         let max_repay = Self::max_repay_assets(repay, liquidation_incentive, U256::MAX)
             .mul_wad_down(math::WAD + U256::exp10(14))
             + math::WAD.mul_div_up(U256::exp10(repay.decimals as usize), repay.price);
@@ -207,7 +368,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             eth_price,
         );
         let profitable = profit > cost && profit - cost > math::WAD / U256::exp10(16);
-        (profitable, max_repay, pool_pair, fee)
+        Some((profitable, max_repay, pool_pair, fee))
     }
 
     fn get_flash_pair(

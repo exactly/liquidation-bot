@@ -162,8 +162,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         let (liquidation_sender, liquidation_receiver) = mpsc::channel(1);
 
         let liquidation = Arc::new(Mutex::new(Liquidation::new(
+            Arc::clone(&client),
             &config.token_pairs,
             liquidator,
+            previewer.clone(),
+            auditor.clone(),
+            market_weth_address,
         )));
 
         let liquidation_lock = liquidation.lock().await;
@@ -791,7 +795,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         }
 
         let mut liquidations: HashMap<Address, (Account, Repay)> = HashMap::new();
-        let mut liquidations_counter = 0;
         if let Some(address) = &user {
             let account = &self.accounts[address];
             self.check_liquidations_on_account(
@@ -799,7 +802,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 account,
                 to_timestamp,
                 last_gas_price,
-                &mut liquidations_counter,
                 &mut liquidations,
             );
         } else {
@@ -809,7 +811,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     account,
                     to_timestamp,
                     last_gas_price,
-                    &mut liquidations_counter,
                     &mut liquidations,
                 );
             }
@@ -818,11 +819,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             "accounts to check for liquidations {:#?}",
             self.accounts.len()
         );
-        println!("accounts to liquidate {:#?}", liquidations_counter);
+        println!("accounts to liquidate {:#?}", liquidations.len());
         if liquidations.len() > 0 {
             self.liquidation_sender
                 .send(LiquidationData {
-                    liquidations: liquidations,
+                    liquidations,
                     eth_price: self.markets[&self.market_weth_address].oracle_price,
                     gas_price: *last_gas_price,
                     liquidation_incentive: self.liquidation_incentive.clone(),
@@ -831,6 +832,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     } else {
                         LiquidationAction::Insert
                     },
+                    markets: self.markets.keys().cloned().collect(),
+                    assets: self
+                        .markets
+                        .iter()
+                        .map(|(address, market)| (*address, market.asset))
+                        .collect(),
+                    oracle: self.oracle.address(),
                 })
                 .await?;
         }
@@ -843,23 +851,22 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         account: &Account,
         to_timestamp: U256,
         last_gas_price: &U256,
-        liquidations_counter: &mut i32,
         liquidations: &mut HashMap<Address, (Account, Repay)>,
     ) {
         let hf = Self::compute_hf(&self.markets, account, to_timestamp);
         if let Ok((hf, _, _, repay)) = hf {
             if hf < math::WAD && repay.adjusted_debt != U256::zero() {
-                let (profitable, _, _, _) = Liquidation::<M, S>::is_profitable(
+                if let Some((profitable, _, _, _)) = Liquidation::<M, S>::is_profitable(
                     &repay,
                     &self.liquidation_incentive,
                     *last_gas_price,
                     self.markets[&self.market_weth_address].oracle_price,
                     &self.token_pairs,
                     &self.tokens,
-                );
-                if profitable {
-                    *liquidations_counter += 1;
-                    liquidations.insert(address.clone(), (account.clone(), repay));
+                ) {
+                    if profitable {
+                        liquidations.insert(address.clone(), (account.clone(), repay));
+                    }
                 }
             }
         }
