@@ -20,16 +20,16 @@ use super::{
 pub struct Repay {
     pub price: U256,
     pub decimals: u8,
-    pub seize_available: U256,
-    pub seizable_collateral: Option<Address>,
-    pub market_to_liquidate: Option<Address>,
-    pub total_collateral: U256,
-    pub adjusted_collateral: U256,
-    pub total_debt: U256,
-    pub adjusted_debt: U256,
+    pub market_to_seize: Option<Address>,
+    pub market_to_seize_value: U256,
+    pub market_to_repay: Option<Address>,
+    pub market_to_liquidate_debt: U256,
+    pub total_value_collateral: U256,
+    pub total_adjusted_collateral: U256,
+    pub total_value_debt: U256,
+    pub total_adjusted_debt: U256,
     pub repay_asset_address: Address,
     pub collateral_asset_address: Address,
-    pub market_to_liquidate_debt: U256,
 }
 
 #[derive(Debug)]
@@ -174,7 +174,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         assets: &HashMap<Address, Address>,
     ) -> Result<()> {
         println!("Liquidating account {:?}", account);
-        if let Some(address) = &repay.market_to_liquidate {
+        if let Some(address) = &repay.market_to_repay {
             let response = self
                 .is_profitable_async(account.address, last_gas_price, markets, oracle, assets)
                 .await;
@@ -194,17 +194,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             }
 
             println!("Liquidating on market {:#?}", address);
-            println!(
-                "seizing                    {:#?}",
-                repay.seizable_collateral
-            );
+            println!("seizing                    {:#?}", repay.market_to_seize);
 
             // liquidate using liquidator contract
             let func = self
                 .liquidator
                 .liquidate(
                     *address,
-                    repay.seizable_collateral.unwrap_or(Address::zero()),
+                    repay.market_to_seize.unwrap_or(Address::zero()),
                     account.address,
                     max_repay,
                     pool_pair,
@@ -307,11 +304,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                 );
                 let adjusted_collateral =
                     collateral_value.mul_wad_down(market.adjust_factor.into());
-                repay.total_collateral += collateral_value;
-                repay.adjusted_collateral += adjusted_collateral;
-                if adjusted_collateral >= repay.seize_available {
-                    repay.seize_available = adjusted_collateral;
-                    repay.seizable_collateral = Some(market.market);
+                repay.total_value_collateral += collateral_value;
+                repay.total_adjusted_collateral += adjusted_collateral;
+                if adjusted_collateral >= repay.market_to_seize_value {
+                    repay.market_to_seize_value = adjusted_collateral;
+                    repay.market_to_seize = Some(market.market);
                     repay.collateral_asset_address = assets[&market.market];
                 }
             };
@@ -332,11 +329,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                 U256::exp10(market.decimals as usize),
             );
             let adjusted_debt = market_debt_value.div_wad_up(market.adjust_factor.into());
-            repay.total_debt += market_debt_value;
-            repay.adjusted_debt += adjusted_debt;
+            repay.total_value_debt += market_debt_value;
+            repay.total_adjusted_debt += adjusted_debt;
             if adjusted_debt >= repay.market_to_liquidate_debt {
                 repay.market_to_liquidate_debt = adjusted_debt;
-                repay.market_to_liquidate = Some(market.market);
+                repay.market_to_repay = Some(market.market);
                 repay.price = prices[&market.market];
                 repay.decimals = market.decimals;
                 repay.repay_asset_address = assets[&market.market];
@@ -413,9 +410,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         U256::min(
             U256::min(
                 repay
-                    .total_debt
+                    .total_value_debt
                     .mul_wad_up(U256::min(math::WAD, close_factor)),
-                repay.seize_available.div_wad_up(
+                repay.market_to_seize_value.div_wad_up(
                     math::WAD + liquidation_incentive.liquidator + liquidation_incentive.lenders,
                 ),
             )
@@ -465,11 +462,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
     ) -> U256 {
         let target_health = U256::exp10(16usize) * 125u32;
         let adjust_factor = repay
-            .adjusted_collateral
-            .div_wad_up(repay.total_collateral)
-            .mul_wad_up(repay.total_debt.div_wad_up(repay.adjusted_debt));
+            .total_adjusted_collateral
+            .div_wad_up(repay.total_value_collateral)
+            .mul_wad_up(repay.total_value_debt.div_wad_up(repay.total_adjusted_debt));
         let close_factor = (target_health
-            - repay.adjusted_collateral.div_wad_up(repay.adjusted_debt))
+            - repay
+                .total_adjusted_collateral
+                .div_wad_up(repay.total_adjusted_debt))
         .div_wad_up(
             target_health
                 - adjust_factor.mul_wad_down(

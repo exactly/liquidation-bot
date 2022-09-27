@@ -855,7 +855,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
     ) {
         let hf = Self::compute_hf(&self.markets, account, to_timestamp);
         if let Ok((hf, _, _, repay)) = hf {
-            if hf < math::WAD && repay.adjusted_debt != U256::zero() {
+            if hf < math::WAD && repay.total_adjusted_debt != U256::zero() {
                 if let Some((profitable, _, _, _)) = Liquidation::<M, S>::is_profitable(
                     &repay,
                     &self.liquidation_incentive,
@@ -1446,9 +1446,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     .mul_div_down(market.oracle_price, U256::exp10(market.decimals as usize));
                 total_collateral += value;
                 adjusted_collateral += value.mul_wad_down(market.adjust_factor);
-                if value >= repay.seize_available {
-                    repay.seize_available = value;
-                    repay.seizable_collateral = Some(*market_address);
+                if value >= repay.market_to_seize_value {
+                    repay.market_to_seize_value = value;
+                    repay.market_to_seize = Some(*market_address);
                 }
             }
             let mut current_debt = U256::zero();
@@ -1471,15 +1471,15 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 repay.price = market.oracle_price;
                 repay.decimals = market.decimals;
                 repay.market_to_liquidate_debt = value;
-                repay.market_to_liquidate = Some(*market_address);
+                repay.market_to_repay = Some(*market_address);
             }
         }
-        repay.total_collateral = total_collateral;
-        repay.adjusted_collateral = adjusted_collateral;
-        repay.total_debt = total_debt;
-        repay.adjusted_debt = adjusted_debt;
-        repay.repay_asset_address = markets[&repay.market_to_liquidate.unwrap()].asset;
-        if let Some(seizable_collateral) = &repay.seizable_collateral {
+        repay.total_value_collateral = total_collateral;
+        repay.total_adjusted_collateral = adjusted_collateral;
+        repay.total_value_debt = total_debt;
+        repay.total_adjusted_debt = adjusted_debt;
+        repay.repay_asset_address = markets[&repay.market_to_repay.unwrap()].asset;
+        if let Some(seizable_collateral) = &repay.market_to_seize {
             repay.collateral_asset_address = markets[seizable_collateral].asset;
         }
         let hf = if adjusted_debt == U256::zero() {
