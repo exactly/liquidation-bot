@@ -8,7 +8,8 @@ pub struct Config {
     pub chain_id: u64,
     pub chain_id_name: String,
     pub wallet: Wallet<SigningKey>,
-    pub eth_provider_rpc: String,
+    pub rpc_provider: String,
+    pub rpc_provider_relayer: String,
     pub comparison_enabled: bool,
     pub token_pairs: String,
 }
@@ -30,10 +31,22 @@ impl Default for Config {
             .parse::<bool>()
             .unwrap_or(false);
 
-        let (chain_id_name, eth_provider_rpc) = match chain_id {
-            1 => ("mainnet", get_env_or_throw("MAINNET_NODE")),
-            4 => ("rinkeby", get_env_or_throw("RINKEBY_NODE")),
-            1337 => ("fork", get_env_or_throw("FORK_NODE")),
+        let (chain_id_name, rpc_provider, rpc_provider_relayer) = match chain_id {
+            1 => (
+                "mainnet",
+                get_env_or_throw("MAINNET_NODE"),
+                get_env_or_throw("MAINNET_NODE_RELAYER"),
+            ),
+            4 => (
+                "rinkeby",
+                get_env_or_throw("RINKEBY_NODE"),
+                get_env_or_throw("RINKEBY_NODE_RELAYER"),
+            ),
+            1337 => (
+                "fork",
+                get_env_or_throw("FORK_NODE"),
+                get_env_or_throw("FORK_NODE_RELAYER"),
+            ),
             _ => {
                 panic!("Unknown network!")
             }
@@ -45,7 +58,8 @@ impl Default for Config {
             chain_id,
             chain_id_name: chain_id_name.into(),
             wallet,
-            eth_provider_rpc,
+            rpc_provider,
+            rpc_provider_relayer,
             comparison_enabled,
             token_pairs,
         }

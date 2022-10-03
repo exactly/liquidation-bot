@@ -102,6 +102,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for Protocol<
 impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
     async fn get_contracts(
         client: Arc<SignerMiddleware<M, S>>,
+        client_relayer: Arc<SignerMiddleware<M, S>>,
         config: &Config,
     ) -> (
         u64,
@@ -126,16 +127,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         let auditor = Auditor::new(auditor_address, Arc::clone(&client));
         let previewer = Previewer::new(previewer_address, Arc::clone(&client));
         let oracle = ExactlyOracle::new(Address::zero(), Arc::clone(&client));
-        let liquidator = Liquidator::new(liquidator_address, Arc::clone(&client));
+        let liquidator = Liquidator::new(liquidator_address, Arc::clone(&client_relayer));
         (deployed_block, auditor, previewer, oracle, liquidator)
     }
 
     pub async fn new(
         client: Arc<SignerMiddleware<M, S>>,
+        client_relayer: Arc<SignerMiddleware<M, S>>,
         config: &Config,
     ) -> Result<Protocol<M, S>> {
         let (deployed_block, auditor, previewer, oracle, liquidator) =
-            Self::get_contracts(Arc::clone(&client), &config).await;
+            Self::get_contracts(Arc::clone(&client), Arc::clone(&client_relayer), &config).await;
 
         let auditor_markets = auditor.all_markets().call().await?;
         let mut markets = HashMap::<Address, Market<M, S>>::new();
@@ -200,9 +202,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         })
     }
 
-    pub async fn update_client(&mut self, client: Arc<SignerMiddleware<M, S>>, config: &Config) {
+    pub async fn update_client(
+        &mut self,
+        client: Arc<SignerMiddleware<M, S>>,
+        client_relayer: Arc<SignerMiddleware<M, S>>,
+        config: &Config,
+    ) {
         let (_, auditor, previewer, oracle, liquidator) =
-            Self::get_contracts(Arc::clone(&client), config).await;
+            Self::get_contracts(Arc::clone(&client), Arc::clone(&client_relayer), config).await;
         self.client = Arc::clone(&client);
         self.auditor = auditor;
         self.previewer = previewer;

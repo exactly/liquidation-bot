@@ -32,7 +32,8 @@ async fn main() -> Result<()> {
 
     let config = Config::default();
 
-    let eth_provider_rpc = config.eth_provider_rpc.clone();
+    let eth_rpc_provider = config.rpc_provider.clone();
+    let eth_rpc_provider_relayer = config.rpc_provider_relayer.clone();
 
     dbg!(&config);
 
@@ -40,16 +41,20 @@ async fn main() -> Result<()> {
     let mut update_client = false;
     let mut last_client = None;
     loop {
-        if let Some(client) = &last_client {
+        if let Some((client, client_relayer)) = &last_client {
             if let Some(service) = &mut credit_service {
                 if update_client {
                     println!("Updating client");
-                    service.update_client(Arc::clone(client), &config).await;
+                    service
+                        .update_client(Arc::clone(client), Arc::clone(client_relayer), &config)
+                        .await;
                     update_client = false;
                 }
             } else {
                 println!("CREATING CREDIT SERVICE");
-                credit_service = Some(Protocol::new(Arc::clone(client), &config).await?);
+                credit_service = Some(
+                    Protocol::new(Arc::clone(client), Arc::clone(client_relayer), &config).await?,
+                );
             }
             if let Some(service) = credit_service {
                 credit_service = match service.launch().await {
@@ -66,7 +71,10 @@ async fn main() -> Result<()> {
                 }
             }
         } else {
-            last_client = Some(create_client(&config, &eth_provider_rpc).await);
+            last_client = Some((
+                create_client(&config, &eth_rpc_provider).await,
+                create_client(&config, &eth_rpc_provider_relayer).await,
+            ));
         }
     }
     // Ok(())
