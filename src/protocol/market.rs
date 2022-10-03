@@ -99,10 +99,16 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
         for i in latest..=latest + self.max_future_pools as u32 {
             let maturity = i * INTERVAL;
             if let Some(fixed_pool) = self.fixed_pools.get(&maturity) {
-                if U256::from(maturity) > fixed_pool.last_accrual {
-                    smart_pool_earnings += fixed_pool.unassigned_earnings
-                        * (timestamp - fixed_pool.last_accrual)
-                        / (U256::from(maturity) - fixed_pool.last_accrual);
+                let maturity = U256::from(maturity);
+                if maturity > fixed_pool.last_accrual {
+                    smart_pool_earnings += if timestamp < maturity {
+                        fixed_pool.unassigned_earnings.mul_div_down(
+                            timestamp - fixed_pool.last_accrual,
+                            maturity - fixed_pool.last_accrual,
+                        )
+                    } else {
+                        fixed_pool.unassigned_earnings
+                    }
                 }
             }
         }
