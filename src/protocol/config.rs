@@ -12,6 +12,7 @@ pub struct Config {
     pub rpc_provider_relayer: String,
     pub comparison_enabled: bool,
     pub token_pairs: String,
+    pub backup: u32,
 }
 
 impl Default for Config {
@@ -30,6 +31,11 @@ impl Default for Config {
             .unwrap_or("parse".into())
             .parse::<bool>()
             .unwrap_or(false);
+
+        let backup = env::var("BACKUP")
+            .unwrap_or("0".into())
+            .parse::<u32>()
+            .unwrap_or(0);
 
         let (chain_id_name, rpc_provider, rpc_provider_relayer) = match chain_id {
             1 => (
@@ -62,6 +68,7 @@ impl Default for Config {
             rpc_provider_relayer,
             comparison_enabled,
             token_pairs,
+            backup,
         }
     }
 }

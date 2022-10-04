@@ -64,6 +64,7 @@ pub struct Liquidation<M, S> {
     previewer: Previewer<SignerMiddleware<M, S>>,
     auditor: Auditor<SignerMiddleware<M, S>>,
     market_weth_address: Address,
+    backup: u32,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
@@ -74,6 +75,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         previewer: Previewer<SignerMiddleware<M, S>>,
         auditor: Auditor<SignerMiddleware<M, S>>,
         weth_address: Address,
+        backup: u32,
     ) -> Self {
         let (token_pairs, tokens) = parse_token_pairs(token_pairs);
         let token_pairs = Arc::new(token_pairs);
@@ -86,6 +88,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             previewer,
             auditor,
             market_weth_address: weth_address,
+            backup,
         }
     }
 
@@ -109,18 +112,37 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         let mut markets = Vec::new();
         let mut oracle = None;
         let mut assets = HashMap::new();
+        let backup = this.lock().await.backup;
         let d = Duration::from_millis(1);
         loop {
             match time::timeout(d, receiver.recv()).await {
                 Ok(Some(data)) => {
                     match data.action {
                         LiquidationAction::Update => {
-                            liquidations = data.liquidations;
+                            liquidations = data
+                                .liquidations
+                                .into_iter()
+                                .map(|(account_address, (account, repay))| {
+                                    let age = if backup > 0 {
+                                        liquidations
+                                            .get(&account_address)
+                                            .map(|(_, _, age)| *age)
+                                            .unwrap_or(0)
+                                            + 1
+                                    } else {
+                                        0
+                                    };
+                                    (account_address, (account, repay, age))
+                                })
+                                .collect();
                         }
                         LiquidationAction::Insert => {
                             let mut new_liquidations = data.liquidations;
                             for (k, v) in new_liquidations.drain() {
-                                liquidations.insert(k, v);
+                                let liquidation = liquidations.entry(k).or_insert((v.0, v.1, 0));
+                                if backup > 0 {
+                                    liquidation.2 += 1;
+                                }
                             }
                         }
                     }
@@ -139,20 +161,28 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                 Ok(None) => {}
                 Err(_) => {
                     if let Some(liquidation) = &mut liquidations_iter {
-                        if let Some((_, (account, repay))) = liquidation.next() {
-                            this.lock()
-                                .await
-                                .liquidate(
-                                    account,
-                                    repay,
-                                    liquidation_incentive.as_ref().unwrap(),
-                                    gas_price,
-                                    eth_price,
-                                    &markets,
-                                    oracle.as_ref().unwrap(),
-                                    &assets,
-                                )
-                                .await?;
+                        if let Some((_, (account, repay, age))) = liquidation.next() {
+                            if backup == 0 || *age > backup {
+                                if backup > 0 {
+                                    println!("backup liquidation - {}", age);
+                                }
+                                let _ = this
+                                    .lock()
+                                    .await
+                                    .liquidate(
+                                        account,
+                                        repay,
+                                        liquidation_incentive.as_ref().unwrap(),
+                                        gas_price,
+                                        eth_price,
+                                        &markets,
+                                        oracle.as_ref().unwrap(),
+                                        &assets,
+                                    )
+                                    .await;
+                            } else {
+                                println!("backup - not old enough: {}", age);
+                            }
                         } else {
                             liquidations_iter = None;
                         }
