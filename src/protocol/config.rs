@@ -43,10 +43,10 @@ impl Default for Config {
                 get_env_or_throw("MAINNET_NODE"),
                 get_env_or_throw("MAINNET_NODE_RELAYER"),
             ),
-            4 => (
-                "rinkeby",
-                get_env_or_throw("RINKEBY_NODE"),
-                get_env_or_throw("RINKEBY_NODE_RELAYER"),
+            5 => (
+                "goerli",
+                get_env_or_throw("GOERLI_NODE"),
+                get_env_or_throw("GOERLI_NODE_RELAYER"),
             ),
             1337 => (
                 "fork",

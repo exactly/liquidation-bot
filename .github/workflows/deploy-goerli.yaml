@@ -7,7 +7,7 @@ jobs:
   deploy:
     uses: ./.github/workflows/build-and-deploy.yaml
     with:
-      environment: rinkeby
+      environment: goerli
       project_id: exactly-liq-bot
     secrets:
       service_account_key: ${{ secrets.SERVICE_ACCOUNT_KEY }}

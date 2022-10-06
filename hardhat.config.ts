@@ -6,16 +6,16 @@ import { env } from "process";
 import type { HardhatUserConfig } from "hardhat/types";
 
 export default {
-  solidity: { version: "0.8.16", settings: { optimizer: { enabled: true, runs: 6_666_666 } } },
+  solidity: { version: "0.8.17", settings: { optimizer: { enabled: true, runs: 6_666_666 } } },
   networks: {
-    rinkeby: {
-      url: env.RINKEBY_NODE ?? "https://rinkeby.infura.io/",
+    goerli: {
+      url: env.GOERLI_NODE ?? "https://goerli.infura.io/",
       ...(env.MNEMONIC && { accounts: { mnemonic: env.MNEMONIC } }),
     },
   },
   typechain: { outDir: "types" },
   namedAccounts: {
     deployer: { default: 0 },
-    owner: { default: 0, rinkeby: "0x755DF607BA55ff6430FEE0126A52Bf82D1e57F5f" },
+    owner: { default: 0, goerli: "0x1801f5EAeAbA3fD02cBF4b7ED1A7b58AD84C0705" },
   },
 } as HardhatUserConfig;

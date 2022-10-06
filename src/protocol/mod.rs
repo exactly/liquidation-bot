@@ -16,31 +16,31 @@ use ethers::prelude::abigen;
 
 abigen!(
     Market,
-    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/MarketWETH.json",
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/MarketWETH.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     Previewer,
-    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/Previewer.json",
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/Previewer.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     ExactlyOracle,
-    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/ExactlyOracle.json",
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/ExactlyOracle.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     Auditor,
-    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/Auditor.json",
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/Auditor.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     InterestRateModel,
-    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/InterestRateModel.json",
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/InterestRateModel.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
@@ -58,6 +58,6 @@ abigen!(
 
 abigen!(
     Liquidator,
-    "deployments/rinkeby/Liquidator.json",
+    "deployments/goerli/Liquidator.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );

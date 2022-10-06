@@ -121,8 +121,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             config.chain_id_name
         ));
 
-        let (liquidator_address, _, _) =
-            Protocol::<M, S>::parse_abi("deployments/rinkeby/Liquidator.json");
+        let (liquidator_address, _, _) = Protocol::<M, S>::parse_abi(&format!(
+            "deployments/{}/Liquidator.json",
+            config.chain_id_name
+        ));
 
         let auditor = Auditor::new(auditor_address, Arc::clone(&client));
         let previewer = Previewer::new(previewer_address, Arc::clone(&client));

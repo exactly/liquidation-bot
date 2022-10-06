@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-pragma solidity 0.8.16;
+pragma solidity 0.8.17;
 
 import { Test, stdJson } from "forge-std/Test.sol";
 import { Market } from "@exactly-protocol/protocol/contracts/Market.sol";
@@ -141,7 +141,6 @@ contract LiquidatorTest is Test {
 
     string memory network;
     if (block.chainid == 1) network = "mainnet";
-    else if (block.chainid == 4) network = "rinkeby";
     else if (block.chainid == 5) network = "goerli";
 
     addr = vm.readFile(string.concat(base, "deployments/", network, "/", name, ".json")).readAddress(".address");
