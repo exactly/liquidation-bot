@@ -14,8 +14,8 @@ use super::fixed_point_math::FixedPointMath;
 
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct AccountPosition {
-    pub fixed_deposit_positions: HashMap<u32, U256>,
-    pub fixed_borrow_positions: HashMap<u32, U256>,
+    pub fixed_deposit_positions: HashMap<U256, U256>,
+    pub fixed_borrow_positions: HashMap<U256, U256>,
     pub floating_deposit_shares: U256,
     pub floating_borrow_shares: U256,
     pub is_collateral: bool,
@@ -142,7 +142,7 @@ impl Account {
                 .get_mut(&withdraw.maturity)
                 .unwrap();
             // TODO check if this is correct
-            *supply -= withdraw.assets;
+            *supply -= withdraw.position_assets;
         }
     }
 

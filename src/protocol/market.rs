@@ -38,18 +38,18 @@ pub struct Market<M, S> {
     pub floating_utilization: U256,
     pub last_floating_debt_update: U256,
     pub max_future_pools: u8,
-    pub fixed_pools: HashMap<u32, FixedPool>,
+    pub fixed_pools: HashMap<U256, FixedPool>,
     pub smart_pool_fee_rate: U256,
     pub earnings_accumulator: U256,
     pub last_accumulator_accrual: U256,
-    pub earnings_accumulator_smooth_factor: u128,
+    pub earnings_accumulator_smooth_factor: U256,
     pub price_feed: Address,
     pub listed: bool,
     pub floating_full_utilization: u128,
     pub floating_a: u128,
     pub floating_b: i128,
     pub floating_max_utilization: u128,
-    pub treasury_fee_rate: u128,
+    pub treasury_fee_rate: U256,
     pub asset: Address,
 }
 
@@ -97,7 +97,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
         let latest = ((timestamp - (timestamp % INTERVAL)) / INTERVAL).as_u32();
         let mut smart_pool_earnings = U256::zero();
         for i in latest..=latest + self.max_future_pools as u32 {
-            let maturity = i * INTERVAL;
+            let maturity = U256::from(INTERVAL * i);
             if let Some(fixed_pool) = self.fixed_pools.get(&maturity) {
                 let maturity = U256::from(maturity);
                 if maturity > fixed_pool.last_accrual {

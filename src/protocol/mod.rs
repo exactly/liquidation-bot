@@ -40,7 +40,7 @@ abigen!(
 
 abigen!(
     InterestRateModel,
-    "node_modules/@exactly-protocol/protocol/deployments/goerli/InterestRateModel.json",
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/InterestRateModelWETH.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 

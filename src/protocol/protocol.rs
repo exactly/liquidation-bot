@@ -1280,7 +1280,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                         address,
                         market_account.market,
                         fixed_deposit.position.principal + fixed_deposit.position.fee,
-                        account.fixed_deposit_positions[&fixed_deposit.maturity.as_u32()]
+                        account.fixed_deposit_positions[&fixed_deposit.maturity]
                     );
                 }
                 for fixed_borrow in &market_account.fixed_borrow_positions {
@@ -1289,7 +1289,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                         address,
                         market_account.market,
                         fixed_borrow.position.principal + fixed_borrow.position.fee,
-                        account.fixed_borrow_positions[&fixed_borrow.maturity.as_u32()]
+                        account.fixed_borrow_positions[&fixed_borrow.maturity]
                     );
                     if (fixed_borrow.position.principal + fixed_borrow.position.fee) > U256::zero()
                     {
