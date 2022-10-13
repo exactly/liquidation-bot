@@ -1,4 +1,4 @@
-use super::fixed_point_math::{math, FixedPointMath};
+use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use ethers::prelude::{Address, Middleware, Multicall, Signer, SignerMiddleware, U256};
 use eyre::Result;
 use serde::Deserialize;

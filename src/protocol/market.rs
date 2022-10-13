@@ -6,7 +6,7 @@ use ethers::prelude::{abigen, Middleware, Signer, SignerMiddleware, U256};
 
 use ethers::types::I256;
 
-use super::fixed_point_math::FixedPointMath;
+use super::fixed_point_math::{FixedPointMath, FixedPointMathGen};
 
 const INTERVAL: u32 = 4 * 7 * 86_400;
 
@@ -46,9 +46,9 @@ pub struct Market<M, S> {
     pub price_feed: Address,
     pub listed: bool,
     pub floating_full_utilization: u128,
-    pub floating_a: u128,
+    pub floating_a: U256,
     pub floating_b: i128,
-    pub floating_max_utilization: u128,
+    pub floating_max_utilization: U256,
     pub treasury_fee_rate: U256,
     pub asset: Address,
 }
@@ -135,19 +135,32 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
     }
 
     fn floating_borrow_rate(&self, utilization_before: U256, utilization_after: U256) -> U256 {
-        let r = if utilization_after - utilization_before < U256::exp10(8) * 25u32 {
-            U256::from(self.floating_a)
-                .div_wad_down(U256::from(self.floating_max_utilization) - utilization_before)
-        } else {
-            U256::from(self.floating_a).mul_div_down(
-                (U256::from(self.floating_max_utilization) - utilization_before)
-                    .div_wad_down(U256::from(self.floating_max_utilization) - utilization_after)
-                    .ln_wad()
-                    .into_raw(),
-                utilization_after - utilization_before,
+        let precision_threshold: U256 = U256::exp10(13) * 75u8; // 7.5e14
+
+        let alpha = U256::from(self.floating_max_utilization) - utilization_before;
+        let delta = utilization_after - utilization_before;
+        let r = if delta.div_wad_down(alpha) < precision_threshold {
+            I256::from_raw(
+                (self.floating_a.div_wad_down(alpha)
+                    + self.floating_a.mul_div_down(
+                        U256::exp10(18) * 4u8,
+                        self.floating_max_utilization
+                            - ((utilization_after + utilization_before) / 2u8),
+                    )
+                    + self
+                        .floating_a
+                        .div_wad_down(self.floating_max_utilization - utilization_after))
+                    / 6u8,
             )
-        };
-        (I256::from_raw(r) + I256::from(self.floating_b)).into_raw()
+        } else {
+            self.floating_a.mul_div_down(
+                alpha
+                    .div_wad_down(self.floating_max_utilization - utilization_after)
+                    .ln_wad(),
+                I256::from_raw(delta),
+            )
+        } + I256::from(self.floating_b);
+        r.into_raw()
     }
 
     pub fn total_floating_borrow_assets(&self, timestamp: U256) -> U256 {

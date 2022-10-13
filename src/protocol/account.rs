@@ -6,8 +6,8 @@ use std::{
 };
 
 use super::{
-    BorrowAtMaturityFilter, DepositAtMaturityFilter, Market, RepayAtMaturityFilter, SeizeFilter,
-    WithdrawAtMaturityFilter,
+    fixed_point_math::FixedPointMathGen, BorrowAtMaturityFilter, DepositAtMaturityFilter, Market,
+    RepayAtMaturityFilter, SeizeFilter, WithdrawAtMaturityFilter,
 };
 
 use super::fixed_point_math::FixedPointMath;

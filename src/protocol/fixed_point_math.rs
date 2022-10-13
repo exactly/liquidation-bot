@@ -9,9 +9,10 @@ pub mod math {
         U256([x, 0, 0, 0])
     }
 }
-
+pub trait FixedPointMathGen<T> {
+    fn mul_div_down(&self, y: T, denominator: T) -> T;
+}
 pub trait FixedPointMath {
-    fn mul_div_down(&self, y: Self, denominator: Self) -> Self;
     fn mul_div_up(&self, y: Self, denominator: Self) -> Self;
     fn mul_wad_down(&self, y: Self) -> Self;
     fn mul_wad_up(&self, y: Self) -> Self;
@@ -40,6 +41,20 @@ fn log2(x: U256) -> U256 {
     r = r | (lt(U256::from(0x3u128), x >> r) << 1u32);
     r = r | lt(U256::from(0x1u128), x >> r);
     r
+}
+
+impl FixedPointMathGen<I256> for U256 {
+    fn mul_div_down(&self, y: I256, denominator: I256) -> I256 {
+        let z = I256::from_raw(*self) * y;
+        z / denominator
+    }
+}
+
+impl FixedPointMathGen<U256> for U256 {
+    fn mul_div_down(&self, y: Self, denominator: Self) -> Self {
+        let z = self * y;
+        z / denominator
+    }
 }
 
 impl FixedPointMath for U256 {
@@ -106,10 +121,6 @@ impl FixedPointMath for U256 {
         self.mul_div_up(math::WAD, y)
     }
 
-    fn mul_div_down(&self, y: Self, denominator: Self) -> Self {
-        let z = self * y;
-        z / denominator
-    }
     fn mul_div_up(&self, y: Self, denominator: Self) -> Self {
         let z: I256 = I256::from_raw(self * y);
         let m = if z.is_zero() {

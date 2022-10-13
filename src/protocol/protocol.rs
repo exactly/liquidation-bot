@@ -1,6 +1,6 @@
 use super::config::Config;
 use super::exactly_events::ExactlyEvents;
-use super::fixed_point_math::{math, FixedPointMath};
+use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::liquidation::{Liquidation, LiquidationData, Repay};
 use crate::protocol::liquidation::LiquidationAction;
 use crate::protocol::{Account, AggregatorProxy, Auditor, InterestRateModel, Market};
