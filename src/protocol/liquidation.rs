@@ -493,8 +493,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         let target_health = U256::exp10(16usize) * 125u32;
         let adjust_factor = repay
             .total_adjusted_collateral
-            .div_wad_up(repay.total_value_collateral)
-            .mul_wad_up(repay.total_value_debt.div_wad_up(repay.total_adjusted_debt));
+            .mul_wad_down(repay.total_value_debt)
+            .div_wad_up(
+                repay
+                    .total_adjusted_debt
+                    .mul_wad_up(repay.total_value_collateral),
+            );
         let close_factor = (target_health
             - repay
                 .total_adjusted_collateral
