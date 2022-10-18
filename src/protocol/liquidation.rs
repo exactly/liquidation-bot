@@ -506,7 +506,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         .div_wad_up(
             target_health
                 - adjust_factor.mul_wad_down(
-                    math::WAD + liquidation_incentive.liquidator + liquidation_incentive.lenders,
+                    math::WAD
+                        + liquidation_incentive.liquidator
+                        + liquidation_incentive.lenders
+                        + U256::from(liquidation_incentive.liquidator)
+                            .mul_wad_down(liquidation_incentive.lenders.into()),
                 ),
         );
         close_factor
