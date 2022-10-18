@@ -687,12 +687,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     .await?;
                 return Ok(LogIterating::NextLog);
             }
-            ExactlyEvents::Seize(data) => {
-                self.accounts
-                    .entry(data.borrower)
-                    .or_insert_with(|| Account::new(data.borrower, &self.markets))
-                    .asset_seized(data, &meta.address);
-            }
 
             ExactlyEvents::AdjustFactorSet(data) => {
                 self.markets

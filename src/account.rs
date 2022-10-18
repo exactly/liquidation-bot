@@ -8,7 +8,7 @@ use std::{
 use crate::{
     fixed_point_math::{FixedPointMath, FixedPointMathGen},
     generate_abi::{
-        BorrowAtMaturityFilter, DepositAtMaturityFilter, RepayAtMaturityFilter, SeizeFilter,
+        BorrowAtMaturityFilter, DepositAtMaturityFilter, RepayAtMaturityFilter,
         WithdrawAtMaturityFilter,
     },
     Market,
@@ -157,10 +157,6 @@ impl Account {
         if let Some(position) = data.fixed_borrow_positions.get_mut(&repay.maturity) {
             *position -= repay.position_assets;
         }
-    }
-
-    pub fn asset_seized(&mut self, _seize: SeizeFilter, _fixed_lender: &Address) {
-        // it needs no action since the events emitted by the repay_at_maturity are enough to seize the borrow's assets
     }
 
     pub fn set_collateral(&mut self, market: &Address) {
