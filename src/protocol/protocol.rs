@@ -347,7 +347,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
                     match stream {
                         Ok(mut stream) => {
-                            // let mut last_block = U64::zero();
+                            _ = std::io::Write::flush(&mut writer);
                             while let Some(log) = stream.next().await {
                                 let mut me = service.lock().await;
                                 let status = me.handle_log(log, &debounce_tx, &mut writer).await;
@@ -1027,15 +1027,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             liquidator: previous_liquidator,
             lenders: previous_lenders,
         };
-        let repay = Repay {
-            adjusted_collateral: previous_adjusted_collateral,
-            adjusted_debt: previous_adjusted_debt,
-            total_collateral,
-            total_debt,
-            price: market_prices[&meta.address],
-            decimals: self.markets[&meta.address].decimals,
-            ..Default::default()
-        };
+        let (_, _, _, repay) =
+            Self::compute_hf(&self.markets, &self.accounts[&data.borrower], timestamp)?;
 
         let close_factor =
             Liquidation::<M, S>::calculate_close_factor(&repay, &previous_liquidation_incentive);
