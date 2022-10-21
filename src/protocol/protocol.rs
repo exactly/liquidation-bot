@@ -12,6 +12,7 @@ use ethers::prelude::{
     Address, EthLogDecode, LogMeta, Middleware, Multicall, Signer, SignerMiddleware, U256, U64,
 };
 use ethers::prelude::{Log, PubsubClient};
+use ethers::types::{Block, H256};
 use eyre::Result;
 use serde_json::Value;
 use std::cmp::Reverse;
@@ -225,6 +226,82 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         }
     }
 
+    async fn get_block<'a>(
+        buffer: &'a mut HashMap<U64, Block<H256>>,
+        client: &Arc<SignerMiddleware<M, S>>,
+        key: U64,
+    ) -> &'a Block<H256> {
+        let block_entry = buffer.get(&key);
+        if let None = block_entry {
+            let block = client.get_block(key).await.unwrap().unwrap();
+            buffer.insert(key, block);
+        }
+        &buffer[&key]
+    }
+
+    async fn block_binary_search(
+        cache: &mut HashMap<U64, Block<H256>>,
+        client: &Arc<SignerMiddleware<M, S>>,
+        first: U64,
+        last: U64,
+        timestamp: U256,
+    ) -> (U256, U64) {
+        let mut first = first;
+        let mut last = last;
+
+        let mut middle: U64 = (first + last) / U64::from(2u64);
+        loop {
+            let block = Self::get_block(cache, client, middle).await;
+            let shortest_interval = last - first < U64::from(2u64);
+            if shortest_interval {
+                if block.timestamp == timestamp {
+                    return (block.base_fee_per_gas.unwrap(), middle);
+                } else {
+                    let block = Self::get_block(cache, client, last).await;
+                    return (block.base_fee_per_gas.unwrap(), last);
+                }
+            }
+            if block.timestamp > timestamp {
+                last = middle;
+            } else if block.timestamp < timestamp {
+                first = middle;
+            } else {
+                return (block.base_fee_per_gas.unwrap(), middle);
+            }
+            middle = (first + last) / U64::from(2u64);
+        }
+    }
+
+    async fn get_gas_historical(
+        client: &Arc<SignerMiddleware<M, S>>,
+        timestamp_set: &Vec<U256>,
+    ) -> Vec<U256> {
+        let mut cache = HashMap::new();
+        let mut gas_historical = Vec::new();
+        if timestamp_set.len() == 0 {
+            return gas_historical;
+        }
+        let mut first: U64 = U64::from(1u64);
+        let mut last: U64 = client.get_block_number().await.unwrap_or(first + 1u64);
+        let (last_price, block) = Self::block_binary_search(
+            &mut cache,
+            client,
+            first,
+            last,
+            *timestamp_set.last().unwrap(),
+        )
+        .await;
+        last = block;
+        for timestamp in timestamp_set.iter().take(timestamp_set.len() - 1) {
+            let (price, block) =
+                Self::block_binary_search(&mut cache, client, first, last, *timestamp).await;
+            first = block;
+            gas_historical.push(price);
+        }
+        gas_historical.push(last_price);
+        gas_historical
+    }
+
     pub async fn launch(self) -> Result<Self, Self>
     where
         <M as Middleware>::Provider: PubsubClient,
@@ -301,6 +378,15 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 );
                 if getting_logs {
                     filter = filter.to_block(last_block);
+
+                    println!("Getting prices");
+                    let mut t: Vec<U256> = Vec::new();
+                    t.push(1661289945u128.into());
+                    t.push(1661289960u128.into());
+                    t.push(1661289975u128.into());
+                    let prices = Self::get_gas_historical(&client, &t).await;
+                    println!("prices {:#?}", prices);
+
                     let result = client.get_logs(&filter).await;
                     if let Ok(logs) = result {
                         (None, Some(logs))
