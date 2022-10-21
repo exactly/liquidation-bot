@@ -12,13 +12,13 @@ use ethers::prelude::{
     Address, EthLogDecode, LogMeta, Middleware, Multicall, Signer, SignerMiddleware, U256, U64,
 };
 use ethers::prelude::{Log, PubsubClient};
-use ethers::types::{Block, H256};
+use ethers::types::{Block, Transaction, H256};
 use eyre::Result;
 use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::fs::{self, File};
+use std::io::{self, BufReader, BufWriter, Write};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
@@ -72,6 +72,69 @@ macro_rules! compare {
             true
         }
     };
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+struct BlockInfo {
+    pub timestamp: U256,
+    pub number: U64,
+    pub base_fee_per_gas: U256,
+    pub min_priority_fee_per_gas: U256,
+    pub max_priority_fee_per_gas: U256,
+    pub average_priority_fee_per_gas: U256,
+}
+
+impl From<Block<Transaction>> for BlockInfo {
+    fn from(block: Block<Transaction>) -> Self {
+        let timestamp = block.timestamp;
+        let number = block.number.unwrap_or(U64::default());
+        let base_fee_per_gas = block.base_fee_per_gas.unwrap_or(U256::zero());
+        let (
+            max_priority_fee_per_gas,
+            mut min_priority_fee_per_gas,
+            acc_priority_fee_per_gas,
+            count,
+        ) = block.transactions.iter().fold(
+            (U256::zero(), U256::MAX, U256::zero(), 0u32),
+            |(max, min, acc, count), tx| {
+                let priority_fee_per_gas = if let Some(gas_price) = tx.gas_price {
+                    gas_price - base_fee_per_gas
+                } else {
+                    U256::min(
+                        tx.max_priority_fee_per_gas.unwrap_or(U256::zero()),
+                        tx.max_fee_per_gas.unwrap_or(U256::zero()) - base_fee_per_gas,
+                    )
+                };
+                (
+                    U256::max(priority_fee_per_gas, max),
+                    U256::min(priority_fee_per_gas, min),
+                    acc + priority_fee_per_gas,
+                    count
+                        + if priority_fee_per_gas > U256::zero() {
+                            1
+                        } else {
+                            0
+                        },
+                )
+            },
+        );
+        if min_priority_fee_per_gas == U256::MAX {
+            min_priority_fee_per_gas = U256::zero();
+        }
+        let average_priority_fee_per_gas = if count > 0 {
+            acc_priority_fee_per_gas / count
+        } else {
+            U256::zero()
+        };
+        BlockInfo {
+            timestamp,
+            number,
+            base_fee_per_gas,
+            min_priority_fee_per_gas,
+            max_priority_fee_per_gas,
+            average_priority_fee_per_gas,
+        }
+    }
 }
 
 // #[derive(Debug)]
@@ -227,38 +290,45 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
     }
 
     async fn get_block<'a>(
-        buffer: &'a mut HashMap<U64, Block<H256>>,
+        buffer: &'a mut HashMap<U64, BlockInfo>,
         client: &Arc<SignerMiddleware<M, S>>,
         key: U64,
-    ) -> &'a Block<H256> {
+    ) -> &'a BlockInfo {
         let block_entry = buffer.get(&key);
         if let None = block_entry {
-            let block = client.get_block(key).await.unwrap().unwrap();
-            buffer.insert(key, block);
+            let block = client.get_block_with_txs(key).await.unwrap().unwrap();
+            buffer.insert(key, BlockInfo::from(block));
         }
         &buffer[&key]
     }
 
     async fn block_binary_search(
-        cache: &mut HashMap<U64, Block<H256>>,
+        cache: &mut HashMap<U64, BlockInfo>,
         client: &Arc<SignerMiddleware<M, S>>,
         first: U64,
         last: U64,
         timestamp: U256,
-    ) -> (U256, U64) {
+    ) -> BlockInfo {
         let mut first = first;
         let mut last = last;
 
         let mut middle: U64 = (first + last) / U64::from(2u64);
+        let update = r"-\|/";
+        let mut update_position = 0;
+        print!("  ");
+        io::stdout().flush().unwrap();
         loop {
+            print!("\x08{}", update.chars().nth(update_position).unwrap());
+            io::stdout().flush().unwrap();
+            update_position = (update_position + 1) % 4;
             let block = Self::get_block(cache, client, middle).await;
             let shortest_interval = last - first < U64::from(2u64);
             if shortest_interval {
                 if block.timestamp == timestamp {
-                    return (block.base_fee_per_gas.unwrap(), middle);
+                    return block.clone();
                 } else {
                     let block = Self::get_block(cache, client, last).await;
-                    return (block.base_fee_per_gas.unwrap(), last);
+                    return block.clone();
                 }
             }
             if block.timestamp > timestamp {
@@ -266,7 +336,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             } else if block.timestamp < timestamp {
                 first = middle;
             } else {
-                return (block.base_fee_per_gas.unwrap(), middle);
+                return block.clone();
             }
             middle = (first + last) / U64::from(2u64);
         }
@@ -275,7 +345,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
     async fn get_gas_historical(
         client: &Arc<SignerMiddleware<M, S>>,
         timestamp_set: &Vec<U256>,
-    ) -> Vec<U256> {
+    ) -> Vec<BlockInfo> {
         let mut cache = HashMap::new();
         let mut gas_historical = Vec::new();
         if timestamp_set.len() == 0 {
@@ -283,7 +353,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         }
         let mut first: U64 = U64::from(1u64);
         let mut last: U64 = client.get_block_number().await.unwrap_or(first + 1u64);
-        let (last_price, block) = Self::block_binary_search(
+        let total = timestamp_set.len();
+        print!("\r{} / {}", 1, total);
+        io::stdout().flush().unwrap();
+        let last_block = Self::block_binary_search(
             &mut cache,
             client,
             first,
@@ -291,14 +364,20 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             *timestamp_set.last().unwrap(),
         )
         .await;
-        last = block;
-        for timestamp in timestamp_set.iter().take(timestamp_set.len() - 1) {
-            let (price, block) =
+        last = last_block.number;
+        for (i, timestamp) in timestamp_set
+            .iter()
+            .take(timestamp_set.len() - 1)
+            .enumerate()
+        {
+            print!("\r{} / {}", i + 2, total);
+            io::stdout().flush().unwrap();
+            let block =
                 Self::block_binary_search(&mut cache, client, first, last, *timestamp).await;
-            first = block;
-            gas_historical.push(price);
+            first = block.number;
+            gas_historical.push(block);
         }
-        gas_historical.push(last_price);
+        gas_historical.push(last_block);
         gas_historical
     }
 
@@ -381,11 +460,48 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
 
                     println!("Getting prices");
                     let mut t: Vec<U256> = Vec::new();
-                    t.push(1661289945u128.into());
-                    t.push(1661289960u128.into());
-                    t.push(1661289975u128.into());
-                    let prices = Self::get_gas_historical(&client, &t).await;
-                    println!("prices {:#?}", prices);
+                    fs::read_to_string("timestamp.log")
+                        .unwrap()
+                        .split_whitespace()
+                        .for_each(|s| {
+                            t.push(U256::from_dec_str(s).unwrap());
+                        });
+                    println!("Timestamps: {:#?}", t);
+                    let blocks = Self::get_gas_historical(&client, &t).await;
+                    println!("prices {:#?}", blocks);
+
+                    let file = File::create("prices.log").unwrap();
+                    let mut writer = BufWriter::new(file);
+                    writeln!(
+                        writer,
+                        "{}, {}, {}, {}, {}, {}, {}",
+                        "search",
+                        "block",
+                        "timestamp",
+                        "base_fee_per_gas",
+                        "average_priority_fee_per_gas",
+                        "min_priority_fee_per_gas",
+                        "max_priority_fee_per_gas",
+                    )
+                    .unwrap();
+
+                    for (block, t) in blocks.iter().zip(t) {
+                        writeln!(
+                            writer,
+                            "{}, {}, {}, {}, {}, {}, {}",
+                            t,
+                            block.number,
+                            block.timestamp,
+                            block.base_fee_per_gas,
+                            block.average_priority_fee_per_gas,
+                            block.min_priority_fee_per_gas,
+                            block.max_priority_fee_per_gas,
+                        )
+                        .unwrap();
+                    }
+                    writer.flush().unwrap();
+
+                    panic!("test");
 
                     let result = client.get_logs(&filter).await;
                     if let Ok(logs) = result {
