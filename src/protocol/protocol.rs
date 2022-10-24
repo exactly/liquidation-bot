@@ -81,7 +81,7 @@ struct BlockInfo {
     pub base_fee_per_gas: U256,
     pub min_priority_fee_per_gas: U256,
     pub max_priority_fee_per_gas: U256,
-    pub average_priority_fee_per_gas: U256,
+    pub avg_priority_fee_per_gas: U256,
 }
 
 impl From<Block<Transaction>> for BlockInfo {
@@ -121,7 +121,7 @@ impl From<Block<Transaction>> for BlockInfo {
         if min_priority_fee_per_gas == U256::MAX {
             min_priority_fee_per_gas = U256::zero();
         }
-        let average_priority_fee_per_gas = if count > 0 {
+        let avg_priority_fee_per_gas = if count > 0 {
             acc_priority_fee_per_gas / count
         } else {
             U256::zero()
@@ -132,7 +132,7 @@ impl From<Block<Transaction>> for BlockInfo {
             base_fee_per_gas,
             min_priority_fee_per_gas,
             max_priority_fee_per_gas,
-            average_priority_fee_per_gas,
+            avg_priority_fee_per_gas,
         }
     }
 }
@@ -290,45 +290,45 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
     }
 
     async fn get_block<'a>(
-        buffer: &'a mut HashMap<U64, BlockInfo>,
+        cache: Arc<Mutex<HashMap<U64, BlockInfo>>>,
         client: &Arc<SignerMiddleware<M, S>>,
         key: U64,
-    ) -> &'a BlockInfo {
-        let block_entry = buffer.get(&key);
+    ) -> BlockInfo {
+        let lock = cache.lock().await;
+        let block_entry = lock.get(&key).cloned();
+        drop(lock);
         if let None = block_entry {
             let block = client.get_block_with_txs(key).await.unwrap().unwrap();
-            buffer.insert(key, BlockInfo::from(block));
+            cache.lock().await.insert(key, BlockInfo::from(block));
         }
-        &buffer[&key]
+        cache.lock().await.get(&key).unwrap().clone()
     }
 
     async fn block_binary_search(
-        cache: &mut HashMap<U64, BlockInfo>,
-        client: &Arc<SignerMiddleware<M, S>>,
+        sender: Option<Arc<Sender<(u32, u32)>>>,
+        cache: Arc<Mutex<HashMap<U64, BlockInfo>>>,
+        client: Arc<SignerMiddleware<M, S>>,
         first: U64,
         last: U64,
         timestamp: U256,
+        id: u32,
     ) -> BlockInfo {
         let mut first = first;
         let mut last = last;
 
         let mut middle: U64 = (first + last) / U64::from(2u64);
-        let update = r"-\|/";
-        let mut update_position = 0;
-        print!("  ");
-        io::stdout().flush().unwrap();
         loop {
-            print!("\x08{}", update.chars().nth(update_position).unwrap());
-            io::stdout().flush().unwrap();
-            update_position = (update_position + 1) % 4;
-            let block = Self::get_block(cache, client, middle).await;
+            let block = Self::get_block(Arc::clone(&cache), &client, middle).await;
+            if let Some(sender) = &sender {
+                sender.send((1, id)).await.unwrap_or(());
+            }
             let shortest_interval = last - first < U64::from(2u64);
             if shortest_interval {
                 if block.timestamp == timestamp {
-                    return block.clone();
+                    return block;
                 } else {
-                    let block = Self::get_block(cache, client, last).await;
-                    return block.clone();
+                    let block = Self::get_block(Arc::clone(&cache), &client, last).await;
+                    return block;
                 }
             }
             if block.timestamp > timestamp {
@@ -336,49 +336,135 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             } else if block.timestamp < timestamp {
                 first = middle;
             } else {
-                return block.clone();
+                return block;
             }
             middle = (first + last) / U64::from(2u64);
         }
     }
 
     async fn get_gas_historical(
-        client: &Arc<SignerMiddleware<M, S>>,
-        timestamp_set: &Vec<U256>,
+        sender: Arc<Sender<(u32, u32)>>,
+        client: Arc<SignerMiddleware<M, S>>,
+        timestamp_set: &[U256],
+        cache: Arc<Mutex<HashMap<U64, BlockInfo>>>,
+        first: U64,
+        last: U64,
+        id: u32,
     ) -> Vec<BlockInfo> {
-        let mut cache = HashMap::new();
+        println!(
+            "get_gas_historical thread started size = {}",
+            timestamp_set.len()
+        );
         let mut gas_historical = Vec::new();
         if timestamp_set.len() == 0 {
             return gas_historical;
         }
-        let mut first: U64 = U64::from(1u64);
-        let mut last: U64 = client.get_block_number().await.unwrap_or(first + 1u64);
-        let total = timestamp_set.len();
-        print!("\r{} / {}", 1, total);
-        io::stdout().flush().unwrap();
+        let mut first = first;
+        let mut last = last;
         let last_block = Self::block_binary_search(
-            &mut cache,
-            client,
+            Some(Arc::clone(&sender)),
+            Arc::clone(&cache),
+            Arc::clone(&client),
             first,
             last,
             *timestamp_set.last().unwrap(),
+            id,
         )
         .await;
         last = last_block.number;
-        for (i, timestamp) in timestamp_set
-            .iter()
-            .take(timestamp_set.len() - 1)
-            .enumerate()
-        {
-            print!("\r{} / {}", i + 2, total);
-            io::stdout().flush().unwrap();
-            let block =
-                Self::block_binary_search(&mut cache, client, first, last, *timestamp).await;
+        for timestamp in timestamp_set.iter().take(timestamp_set.len() - 1) {
+            let block = Self::block_binary_search(
+                Some(Arc::clone(&sender)),
+                Arc::clone(&cache),
+                Arc::clone(&client),
+                first,
+                last,
+                *timestamp,
+                id,
+            )
+            .await;
             first = block.number;
             gas_historical.push(block);
+            sender.send((0, id)).await.unwrap_or(());
         }
         gas_historical.push(last_block);
         gas_historical
+    }
+
+    async fn get_gas_historical_parallel(
+        client: Arc<SignerMiddleware<M, S>>,
+        timestamp_set: Vec<U256>,
+    ) -> Vec<BlockInfo> {
+        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let mut handle = Vec::new();
+        let mut first = U64::from(1u64);
+        let mut last = client.get_block_number().await.unwrap_or(first + 1u64);
+        let len = timestamp_set.len();
+        println!("Retrieving initial data");
+        if len > 0 {
+            first = Self::block_binary_search(
+                None,
+                Arc::clone(&cache),
+                Arc::clone(&client),
+                first,
+                last,
+                *timestamp_set.get(0).unwrap(),
+                0,
+            )
+            .await
+            .number;
+            last = Self::block_binary_search(
+                None,
+                Arc::clone(&cache),
+                Arc::clone(&client),
+                first,
+                last,
+                *timestamp_set.last().unwrap(),
+                0,
+            )
+            .await
+            .number;
+        }
+        let (tx, mut rx) = mpsc::channel(50);
+        let tx = Arc::new(tx);
+        tokio::spawn(async move {
+            let mut files = 0;
+            let update = r"-\|/";
+            let mut update_position = 0;
+            print!("\r{} / {}  ", files, len);
+            loop {
+                let v = rx.recv().await;
+                match v {
+                    Some((0, id)) => {
+                        files += 1;
+                        print!("\r{} / {}  ", files, len);
+                        io::stdout().flush().unwrap();
+                    }
+                    Some((1, id)) => {
+                        print!("\x08{}", update.chars().nth(update_position).unwrap());
+                        io::stdout().flush().unwrap();
+                        update_position = (update_position + 1) % 4;
+                    }
+                    _ => break,
+                };
+            }
+        });
+
+        timestamp_set.chunks(len / 8).fold(1, |id, chunk| {
+            let chunk = chunk.to_vec();
+            let client = Arc::clone(&client);
+            let cache = Arc::clone(&cache);
+            let tx = Arc::clone(&tx);
+            handle.push(tokio::spawn(async move {
+                Self::get_gas_historical(tx, client, &chunk, cache, first, last, id).await
+            }));
+            id + 1
+        });
+        let mut result = Vec::new();
+        for h in handle {
+            result.append(&mut h.await.unwrap());
+        }
+        result
     }
 
     pub async fn launch(self) -> Result<Self, Self>
@@ -458,16 +544,18 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 if getting_logs {
                     filter = filter.to_block(last_block);
 
-                    println!("Getting prices");
-                    let mut t: Vec<U256> = Vec::new();
-                    fs::read_to_string("timestamp.log")
+                    let timestamp_dataset: Vec<U256> = fs::read_to_string("timestamp.log")
                         .unwrap()
                         .split_whitespace()
-                        .for_each(|s| {
-                            t.push(U256::from_dec_str(s).unwrap());
-                        });
-                    println!("Timestamps: {:#?}", t);
-                    let blocks = Self::get_gas_historical(&client, &t).await;
+                        .map(|s| U256::from_dec_str(s).unwrap())
+                        .collect();
+                    println!("Getting prices");
+                    println!("Timestamps: {:#?}", timestamp_dataset);
+                    let blocks = Self::get_gas_historical_parallel(
+                        Arc::clone(&client),
+                        timestamp_dataset.clone(),
+                    )
+                    .await;
                     println!("prices {:#?}", blocks);
 
                     let file = File::create("prices.log").unwrap();
@@ -485,7 +573,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     )
                     .unwrap();
 
-                    for (block, t) in blocks.iter().zip(t) {
+                    for (block, t) in blocks.iter().zip(timestamp_dataset.iter()) {
                         writeln!(
                             writer,
                             "{}, {}, {}, {}, {}, {}, {}",
@@ -493,7 +581,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                             block.number,
                             block.timestamp,
                             block.base_fee_per_gas,
-                            block.average_priority_fee_per_gas,
+                            block.avg_priority_fee_per_gas,
                             block.min_priority_fee_per_gas,
                             block.max_priority_fee_per_gas,
                         )
