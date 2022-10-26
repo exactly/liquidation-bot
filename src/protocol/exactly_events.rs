@@ -14,10 +14,9 @@ use crate::protocol::{
     DepositFilter, EarningsAccumulatorSmoothFactorSetFilter, FixedEarningsUpdateFilter,
     FloatingDebtUpdateFilter, InterestRateModelSetFilter, LiquidateFilter,
     LiquidationIncentiveSetFilter, MarketEnteredFilter, MarketExitedFilter, MarketListedFilter,
-    MarketUpdateFilter, MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter,
-    PenaltyRateSetFilter, PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter,
-    ReserveFactorSetFilter, SeizeFilter, TransferFilter, TreasurySetFilter, UnpausedFilter,
-    WithdrawAtMaturityFilter, WithdrawFilter,
+    MarketUpdateFilter, MaxFuturePoolsSetFilter, PausedFilter, PenaltyRateSetFilter,
+    PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter, ReserveFactorSetFilter, SeizeFilter,
+    TransferFilter, TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 use aggregator_mod::NewTransmissionFilter;
 
@@ -53,7 +52,6 @@ pub enum ExactlyEvents {
     MarketListedFilter(MarketListedFilter),
     MarketEnteredFilter(MarketEnteredFilter),
     MarketExitedFilter(MarketExitedFilter),
-    OracleSetFilter(OracleSetFilter),
     LiquidationIncentiveSetFilter(LiquidationIncentiveSetFilter),
     AdjustFactorSetFilter(AdjustFactorSetFilter),
     UpgradedFilter(UpgradedFilter),
@@ -166,9 +164,6 @@ impl EthLogDecode for ExactlyEvents {
         }
         if let Ok(decoded) = MarketExitedFilter::decode_log(log) {
             return Ok(ExactlyEvents::MarketExitedFilter(decoded));
-        }
-        if let Ok(decoded) = OracleSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::OracleSetFilter(decoded));
         }
         if let Ok(decoded) = LiquidationIncentiveSetFilter::decode_log(log) {
             return Ok(ExactlyEvents::LiquidationIncentiveSetFilter(decoded));

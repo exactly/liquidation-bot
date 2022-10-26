@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use tokio::time;
 
 use super::{
-    Account, Auditor, ExactlyOracle, LiquidationIncentive, Liquidator, MarketAccount, Previewer,
+    Account, Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer, PriceFeedWrapper,
 };
 
 #[derive(Default, Debug)]
@@ -53,7 +53,7 @@ pub struct LiquidationData {
     pub action: LiquidationAction,
     pub markets: Vec<Address>,
     pub assets: HashMap<Address, Address>,
-    pub oracle: Address,
+    pub price_feeds: HashMap<Address, Address>,
 }
 
 pub struct Liquidation<M, S> {
@@ -110,7 +110,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         let mut gas_price = U256::zero();
         let mut liquidation_incentive = None;
         let mut markets = Vec::new();
-        let mut oracle = None;
+        let mut price_feeds = HashMap::new();
         let mut assets = HashMap::new();
         let backup = this.lock().await.backup;
         let d = Duration::from_millis(1);
@@ -151,11 +151,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                     gas_price = data.gas_price;
                     liquidation_incentive = Some(data.liquidation_incentive);
                     markets = data.markets;
-                    // ExactlyOracle<SignerMiddleware<M, S>>,
-                    oracle = Some(ExactlyOracle::new(
-                        data.oracle,
-                        Arc::clone(&this.lock().await.client),
-                    ));
+                    price_feeds = data.price_feeds;
                     assets = data.assets;
                 }
                 Ok(None) => {}
@@ -176,7 +172,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                                         gas_price,
                                         eth_price,
                                         &markets,
-                                        oracle.as_ref().unwrap(),
+                                        &price_feeds,
                                         &assets,
                                     )
                                     .await;
@@ -200,13 +196,19 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         last_gas_price: U256,
         _eth_price: U256,
         markets: &Vec<Address>,
-        oracle: &ExactlyOracle<SignerMiddleware<M, S>>,
+        price_feeds: &HashMap<Address, Address>,
         assets: &HashMap<Address, Address>,
     ) -> Result<()> {
         println!("Liquidating account {:?}", account);
         if let Some(address) = &repay.market_to_repay {
             let response = self
-                .is_profitable_async(account.address, last_gas_price, markets, oracle, assets)
+                .is_profitable_async(
+                    account.address,
+                    last_gas_price,
+                    markets,
+                    price_feeds,
+                    assets,
+                )
                 .await;
 
             let (profitable, max_repay, pool_pair, fee) = match response {
@@ -255,7 +257,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         account: Address,
         last_gas_price: U256,
         markets: &Vec<Address>,
-        oracle: &ExactlyOracle<SignerMiddleware<M, S>>,
+        price_feeds: &HashMap<Address, Address>,
         assets: &HashMap<Address, Address>,
     ) -> Option<(bool, U256, Address, u32)> {
         let mut multicall =
@@ -273,9 +275,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
                 .unwrap();
-        for market in markets {
-            price_multicall.add_call(oracle.asset_price(*market));
-        }
+        let price_feed: Vec<PriceFeedWrapper<SignerMiddleware<M, S>>> = markets
+            .iter()
+            .map(|market| PriceFeedWrapper::new(price_feeds[market], self.client.clone()))
+            .collect();
+        price_feed.iter().for_each(|price_feed| {
+            price_multicall.add_call(price_feed.latest_answer());
+        });
 
         let response = tokio::try_join!(multicall.call(), price_multicall.call_raw());
 

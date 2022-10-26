@@ -27,8 +27,8 @@ abigen!(
 );
 
 abigen!(
-    ExactlyOracle,
-    "node_modules/@exactly-protocol/protocol/deployments/goerli/ExactlyOracle.json",
+    PriceFeedWrapper,
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/PriceFeedWrapperwstETH.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 

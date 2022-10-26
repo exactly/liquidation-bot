@@ -27,7 +27,7 @@ pub struct FixedPool {
 pub struct Market<M, S> {
     pub contract: crate::protocol::market_mod::Market<SignerMiddleware<M, S>>,
     pub interest_rate_model: Address,
-    pub oracle_price: U256,
+    pub price: U256,
     pub penalty_rate: U256,
     pub adjust_factor: U256,
     pub decimals: u8,
@@ -51,6 +51,7 @@ pub struct Market<M, S> {
     pub floating_max_utilization: U256,
     pub treasury_fee_rate: U256,
     pub asset: Address,
+    pub event_emitter: Address,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Eq for Market<M, S> {}
@@ -66,7 +67,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
         Self {
             contract: crate::protocol::market_mod::Market::new(address, Arc::clone(client)),
             interest_rate_model: Default::default(),
-            oracle_price: Default::default(),
+            price: Default::default(),
             penalty_rate: Default::default(),
             adjust_factor: Default::default(),
             decimals: Default::default(),
@@ -90,6 +91,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             floating_max_utilization: Default::default(),
             treasury_fee_rate: Default::default(),
             asset: Default::default(),
+            event_emitter: Default::default(),
         }
     }
 
