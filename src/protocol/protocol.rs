@@ -3,8 +3,11 @@ use super::exactly_events::ExactlyEvents;
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::liquidation::{Liquidation, LiquidationData, Repay};
 use crate::protocol::liquidation::LiquidationAction;
-use crate::protocol::{Account, AggregatorProxy, Auditor, InterestRateModel, Market, PriceFeed};
+use crate::protocol::{
+    Account, AggregatorProxy, Auditor, InterestRateModel, Market, PriceFeed, PriceFeedLido,
+};
 use ethers::abi::{Tokenizable, Tokenize};
+use ethers::prelude::builders::ContractCall;
 use ethers::prelude::signer::SignerMiddlewareError;
 use ethers::prelude::{
     abi::{Abi, RawLog},
@@ -667,16 +670,30 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             }
 
             ExactlyEvents::PriceFeedSetFilter(data) => {
-                let price_feed_address = if let Ok(price_feed) =
-                    PriceFeedWrapper::new(data.price_feed, Arc::clone(&self.client))
-                        .main_price_feed()
-                        .block(meta.block_number)
-                        .call()
-                        .await
+                let wrapper = PriceFeedWrapper::new(data.price_feed, Arc::clone(&self.client));
+                let mut wrapper_multicall =
+                    Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
+                        .await?;
+                wrapper_multicall.add_call(wrapper.main_price_feed());
+                wrapper_multicall.add_call(wrapper.wrapper());
+                wrapper_multicall.add_call(wrapper.conversion_selector());
+                wrapper_multicall.add_call(wrapper.base_unit());
+
+                let (price_feed_address, wrapper) = if let Ok(wrapper_price_feed) =
+                    wrapper_multicall.block(meta.block_number).call().await
                 {
-                    price_feed
+                    let (main_price_feed, wrapper, conversion_selector, base_unit): (
+                        Address,
+                        Address,
+                        [u8; 4],
+                        U256,
+                    ) = wrapper_price_feed;
+                    (
+                        main_price_feed,
+                        Some((wrapper, conversion_selector, base_unit)),
+                    )
                 } else {
-                    data.price_feed
+                    (data.price_feed, None)
                 };
 
                 let event_emitter = if let Ok(event_emitter) =
@@ -705,6 +722,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
 
                 market.price_feed = data.price_feed;
                 market.event_emitter = event_emitter;
+                market.price_feed_wrapper = data.price_feed;
+                if let Some((wrapper, conversion_selector, base_unit)) = wrapper {
+                    market.price_feed = price_feed_address;
+                    market.wrapper = wrapper;
+                    market.conversion_selector = conversion_selector;
+                    market.base_unit = base_unit;
+                }
                 self.update_prices(meta.block_number).await?;
                 self.last_sync = (
                     meta.block_number,
@@ -718,18 +742,44 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             }
 
             ExactlyEvents::AnswerUpdatedFilter(data) => {
-                let market = self.markets.iter().find_map(|(address, market)| {
-                    if market.event_emitter == meta.address {
-                        return Some(*address);
-                    }
-                    None
-                });
-                if let Some(market) = market {
-                    self.markets
+                let markets = self.markets.iter().fold(
+                    Vec::<Address>::new(),
+                    |mut markets, (address, market)| {
+                        if market.event_emitter == meta.address {
+                            markets.push(*address);
+                        }
+                        markets
+                    },
+                );
+                for market in markets {
+                    let market = self
+                        .markets
                         .entry(market)
-                        .or_insert_with_key(|key| Market::new(*key, &self.client))
-                        .price =
-                        data.current.into_raw() * U256::exp10(18 - self.price_decimals.as_usize());
+                        .or_insert_with_key(|key| Market::new(*key, &self.client));
+
+                    let price: U256 = if market.wrapper != Address::zero() {
+                        let mut multicall = Multicall::<SignerMiddleware<M, S>>::new(
+                            Arc::clone(&self.client),
+                            None,
+                        )
+                        .await?;
+                        multicall.add_call(
+                            PriceFeedWrapper::new(market.price_feed, Arc::clone(&self.client))
+                                .latest_answer(),
+                        );
+                        let price_feed =
+                            PriceFeedLido::new(market.wrapper, Arc::clone(&self.client));
+                        let conversion_selector_method: ContractCall<SignerMiddleware<M, S>, U256> =
+                            price_feed.method_hash(market.conversion_selector, market.base_unit)?;
+                        multicall.add_call(conversion_selector_method);
+                        let (main_price, rate): (U256, U256) =
+                            multicall.block(meta.block_number).call().await?;
+                        rate.mul_div_down(main_price, market.base_unit)
+                            * U256::exp10(18 - self.price_decimals.as_usize())
+                    } else {
+                        data.current.into_raw() * U256::exp10(18 - self.price_decimals.as_usize())
+                    };
+                    market.price = price;
                 }
             }
 
@@ -788,7 +838,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 }
             }
             ExactlyEvents::InitializedFilter(_) => {
-                self.price_decimals = self.auditor.price_decimals().call().await?;
+                self.price_decimals = self
+                    .auditor
+                    .price_decimals()
+                    .block(meta.block_number)
+                    .call()
+                    .await?;
             }
             _ => {
                 println!("Event not handled - {:?}", event);
@@ -870,7 +925,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     price_feeds: self
                         .markets
                         .iter()
-                        .map(|(address, market)| (*address, market.price_feed))
+                        .map(|(address, market)| (*address, market.price_feed_wrapper))
                         .collect(),
                 })
                 .await?;
@@ -1170,7 +1225,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     multicall.add_call(market.contract.last_floating_debt_update());
                     multicall.add_call(market.contract.floating_utilization());
                     multicall.add_call(market.contract.total_supply());
-                    multicall.add_call(self.auditor.asset_price(market.price_feed));
+                    multicall.add_call(self.auditor.asset_price(market.price_feed_wrapper));
                 }
                 let responses = multicall.block(block).call_raw().await?;
                 for (i, market) in self.markets.values().enumerate() {

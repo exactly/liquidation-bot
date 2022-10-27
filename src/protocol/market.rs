@@ -52,6 +52,10 @@ pub struct Market<M, S> {
     pub treasury_fee_rate: U256,
     pub asset: Address,
     pub event_emitter: Address,
+    pub wrapper: Address,
+    pub conversion_selector: [u8; 4],
+    pub base_unit: U256,
+    pub price_feed_wrapper: Address,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Eq for Market<M, S> {}
@@ -92,6 +96,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             treasury_fee_rate: Default::default(),
             asset: Default::default(),
             event_emitter: Default::default(),
+            wrapper: Default::default(),
+            conversion_selector: Default::default(),
+            base_unit: Default::default(),
+            price_feed_wrapper: Default::default(),
         }
     }
 

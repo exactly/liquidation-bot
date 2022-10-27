@@ -3,20 +3,22 @@ use ethers::{
     prelude::EthLogDecode,
 };
 
+use crate::protocol::market_mod::ApprovalFilter;
+use crate::protocol::market_mod::TransferFilter;
 use crate::protocol::{
     auditor_mod::{
         AdminChangedFilter, InitializedFilter, RoleAdminChangedFilter, RoleGrantedFilter,
         RoleRevokedFilter, UpgradedFilter,
     },
     pricefeed_mod::{AnswerUpdatedFilter, NewRoundFilter},
-    AccumulatorAccrualFilter, AdjustFactorSetFilter, ApprovalFilter, BackupFeeRateSetFilter,
+    AccumulatorAccrualFilter, AdjustFactorSetFilter, BackupFeeRateSetFilter,
     BorrowAtMaturityFilter, BorrowFilter, DampSpeedSetFilter, DepositAtMaturityFilter,
     DepositFilter, EarningsAccumulatorSmoothFactorSetFilter, FixedEarningsUpdateFilter,
     FloatingDebtUpdateFilter, InterestRateModelSetFilter, LiquidateFilter,
     LiquidationIncentiveSetFilter, MarketEnteredFilter, MarketExitedFilter, MarketListedFilter,
     MarketUpdateFilter, MaxFuturePoolsSetFilter, PausedFilter, PenaltyRateSetFilter,
     PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter, ReserveFactorSetFilter, SeizeFilter,
-    TransferFilter, TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
+    TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 use aggregator_mod::NewTransmissionFilter;
 

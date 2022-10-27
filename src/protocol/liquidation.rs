@@ -12,9 +12,7 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
 use tokio::time;
 
-use super::{
-    Account, Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer, PriceFeedWrapper,
-};
+use super::{Account, Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer};
 
 #[derive(Default, Debug)]
 pub struct Repay {
@@ -275,12 +273,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
                 .unwrap();
-        let price_feed: Vec<PriceFeedWrapper<SignerMiddleware<M, S>>> = markets
-            .iter()
-            .map(|market| PriceFeedWrapper::new(price_feeds[market], self.client.clone()))
-            .collect();
-        price_feed.iter().for_each(|price_feed| {
-            price_multicall.add_call(price_feed.latest_answer());
+        markets.iter().for_each(|market| {
+            price_multicall.add_call(self.auditor.asset_price(price_feeds[market]));
         });
 
         let response = tokio::try_join!(multicall.call(), price_multicall.call_raw());
