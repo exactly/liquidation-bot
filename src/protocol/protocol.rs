@@ -173,6 +173,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             auditor.clone(),
             market_weth_address,
             config.backup,
+            config.liquidate_unprofitable,
         )));
 
         let liquidation_lock = liquidation.lock().await;

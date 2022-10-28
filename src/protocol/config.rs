@@ -2,6 +2,7 @@ extern crate dotenv;
 use ethers::prelude::{coins_bip39::English, k256::ecdsa::SigningKey, MnemonicBuilder, Wallet};
 use std::env;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -13,6 +14,7 @@ pub struct Config {
     pub comparison_enabled: bool,
     pub token_pairs: String,
     pub backup: u32,
+    pub liquidate_unprofitable: bool,
 }
 
 impl Default for Config {
@@ -60,6 +62,11 @@ impl Default for Config {
 
         let token_pairs = env::var("TOKEN_PAIRS").unwrap_or("".into());
 
+        let liquidate_unprofitable =
+            Arc::new(env::var("LIQUIDATE_UNPROFITABLE").unwrap_or("false".into()))
+                .parse::<bool>()
+                .unwrap_or(false);
+
         Config {
             chain_id,
             chain_id_name: chain_id_name.into(),
@@ -69,6 +76,7 @@ impl Default for Config {
             comparison_enabled,
             token_pairs,
             backup,
+            liquidate_unprofitable,
         }
     }
 }

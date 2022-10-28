@@ -63,6 +63,7 @@ pub struct Liquidation<M, S> {
     auditor: Auditor<SignerMiddleware<M, S>>,
     market_weth_address: Address,
     backup: u32,
+    liquidate_unprofitable: bool,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
@@ -74,6 +75,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         auditor: Auditor<SignerMiddleware<M, S>>,
         weth_address: Address,
         backup: u32,
+        liquidate_unprofitable: bool,
     ) -> Self {
         let (token_pairs, tokens) = parse_token_pairs(token_pairs);
         let token_pairs = Arc::new(token_pairs);
@@ -87,6 +89,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             auditor,
             market_weth_address: weth_address,
             backup,
+            liquidate_unprofitable,
         }
     }
 
@@ -214,7 +217,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                 None => return Ok(()),
             };
 
-            if !profitable {
+            if !profitable && !self.liquidate_unprofitable {
                 println!("not profitable to liquidate");
                 println!(
                     "repay$: {:?}",
