@@ -1,3 +1,5 @@
+use std::panic;
+use std::process;
 use std::sync::Arc;
 
 use ethers::prelude::k256::ecdsa::SigningKey;
@@ -29,6 +31,11 @@ async fn create_client(
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("exactly liquidation bot started!");
+
+    panic::set_hook(Box::new(|panic_info| {
+        println!("panic: {:?}", panic_info);
+        process::abort();
+    }));
 
     let config = Config::default();
 
