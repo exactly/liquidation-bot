@@ -332,7 +332,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                         };
                     }
                     if last_block >= latest_block {
-                        first_block = latest_block + 1u64;
+                        first_block = latest_block;
                         getting_logs = false;
                     } else {
                         first_block = last_block + 1u64;
