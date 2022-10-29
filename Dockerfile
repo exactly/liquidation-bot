@@ -8,6 +8,7 @@ COPY Cargo.lock .
 COPY Cargo.toml .
 COPY deployments deployments
 COPY src src
+COPY lib lib
 
 RUN cargo build --release
 
