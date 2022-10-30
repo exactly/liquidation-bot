@@ -35,6 +35,7 @@ use super::{LiquidationIncentive, Liquidator, MarketAccount, Previewer, PriceFee
 use crate::protocol::LiquidateFilter;
 
 const DEFAULT_GAS_PRICE: U256 = math::make_u256(10_000u64);
+const BASE_FEED: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
 enum ContractKeyKind {
@@ -671,6 +672,16 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             }
 
             ExactlyEvents::PriceFeedSetFilter(data) => {
+                if data.price_feed == Address::from_str(BASE_FEED).unwrap() {
+                    let market = self
+                        .markets
+                        .entry(data.market)
+                        .or_insert_with_key(|key| Market::new(*key, &self.client));
+
+                    market.price_feed = data.price_feed;
+                    market.price = U256::exp10(self.price_decimals.as_usize());
+                    return Ok(LogIterating::NextLog);
+                }
                 let wrapper = PriceFeedWrapper::new(data.price_feed, Arc::clone(&self.client));
                 let mut wrapper_multicall =
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
