@@ -397,17 +397,25 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             .collect();
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        let mut updates = 0;
         price_feed.iter().for_each(|price_feed_wrapper| {
-            multicall.add_call(price_feed_wrapper.latest_answer());
+            if price_feed_wrapper.address() != Address::from_str(BASE_FEED).unwrap() {
+                updates += 1;
+                multicall.add_call(price_feed_wrapper.latest_answer());
+            }
         });
-        if price_feed.len() == 0 {
+        if updates == 0 {
             return Ok(());
         }
         let result = multicall.block(block).call_raw().await?;
         for (i, market) in self
             .markets
             .values_mut()
-            .filter(|m| m.listed && m.price_feed != Address::zero())
+            .filter(|m| {
+                m.listed
+                    && m.price_feed != Address::zero()
+                    && m.price_feed != Address::from_str(BASE_FEED).unwrap()
+            })
             .enumerate()
         {
             market.price = result[i].clone().into_int().unwrap()
