@@ -28,7 +28,7 @@ abigen!(
 
 abigen!(
     PriceFeedWrapper,
-    "node_modules/@exactly-protocol/protocol/deployments/goerli/PriceFeedWrapperwstETH.json",
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/PriceFeedwstETH.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
