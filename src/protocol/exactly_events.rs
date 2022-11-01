@@ -1,6 +1,8 @@
+use std::str::FromStr;
 use ethers::{
     abi::{Error, RawLog},
     prelude::EthLogDecode,
+    types::H256,
 };
 
 use crate::protocol::market_mod::ApprovalFilter;
@@ -72,6 +74,8 @@ pub enum ExactlyEvents {
     AnswerUpdatedFilter(AnswerUpdatedFilter),
     NewRoundFilter(NewRoundFilter),
     NewTransmissionFilter(NewTransmissionFilter),
+
+    Ignored,
 }
 
 impl EthLogDecode for ExactlyEvents {
@@ -214,6 +218,28 @@ impl EthLogDecode for ExactlyEvents {
         if let Ok(decoded) = NewTransmissionFilter::decode_log(log) {
             return Ok(ExactlyEvents::NewTransmissionFilter(decoded));
         }
+
+        let ignored_events: Vec<H256> = [
+            "0xe8ec50e5150ae28ae37e493ff389ffab7ffaec2dc4dccfca03f12a3de29d12b2",
+            "0xd0d9486a2c673e2a4b57fc82e4c8a556b3e2b82dd5db07e2c04a920ca0f469b6",
+            "0xd0b1dac935d85bd54cf0a33b0d41d39f8cf53a968465fc7ea2377526b8ac712c",
+        ]
+        .iter()
+        .map(|x| H256::from_str(x).unwrap())
+        .collect();
+        if log
+            .topics
+            .iter()
+            .find(|topic| {
+                ignored_events
+                    .iter()
+                    .find(|ignored_topic| topic == ignored_topic)
+                    .is_some()
+            })
+            .is_some()
+        {
+            return Ok(ExactlyEvents::Ignored);
+        };
 
         println!("Missing event: {:?}", log);
         Err(Error::InvalidData)
