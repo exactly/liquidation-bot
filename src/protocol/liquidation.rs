@@ -265,19 +265,20 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
                 .unwrap();
-        multicall.add_call(self.previewer.exactly(account));
+        multicall.add_call(self.previewer.exactly(account), false);
         multicall.add_call(
             self.auditor
                 .account_liquidity(account, Address::zero(), U256::zero()),
+            false,
         );
-        multicall.add_call(self.auditor.liquidation_incentive());
+        multicall.add_call(self.auditor.liquidation_incentive(), false);
 
         let mut price_multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
                 .unwrap();
         markets.iter().for_each(|market| {
-            price_multicall.add_call(self.auditor.asset_price(price_feeds[market]));
+            price_multicall.add_call(self.auditor.asset_price(price_feeds[market]), false);
         });
 
         let response = tokio::try_join!(multicall.call(), price_multicall.call_raw());

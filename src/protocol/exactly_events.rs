@@ -4,15 +4,14 @@ use ethers::{
     prelude::EthLogDecode,
     types::H256,
 };
+use std::str::FromStr;
 
-use crate::protocol::market_mod::ApprovalFilter;
-use crate::protocol::market_mod::TransferFilter;
 use crate::protocol::{
-    auditor_mod::{
+    auditor::{
         AdminChangedFilter, InitializedFilter, RoleAdminChangedFilter, RoleGrantedFilter,
         RoleRevokedFilter, UpgradedFilter,
     },
-    pricefeed_mod::{AnswerUpdatedFilter, NewRoundFilter},
+    price_feed::{AnswerUpdatedFilter, NewRoundFilter},
     AccumulatorAccrualFilter, AdjustFactorSetFilter, BackupFeeRateSetFilter,
     BorrowAtMaturityFilter, BorrowFilter, DampSpeedSetFilter, DepositAtMaturityFilter,
     DepositFilter, EarningsAccumulatorSmoothFactorSetFilter, FixedEarningsUpdateFilter,

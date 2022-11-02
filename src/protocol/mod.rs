@@ -15,7 +15,7 @@ pub use protocol::Protocol;
 use ethers::prelude::abigen;
 
 abigen!(
-    Market,
+    MarketProtocol,
     "node_modules/@exactly-protocol/protocol/deployments/goerli/MarketWETH.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );

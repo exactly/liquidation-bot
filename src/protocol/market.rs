@@ -25,7 +25,7 @@ pub struct FixedPool {
 }
 
 pub struct Market<M, S> {
-    pub contract: crate::protocol::market_mod::Market<SignerMiddleware<M, S>>,
+    pub contract: crate::protocol::market_protocol::MarketProtocol<SignerMiddleware<M, S>>,
     pub interest_rate_model: Address,
     pub price: U256,
     pub penalty_rate: U256,
@@ -69,7 +69,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> PartialEq for Market<M, S> {
 impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
     pub fn new(address: Address, client: &Arc<SignerMiddleware<M, S>>) -> Self {
         Self {
-            contract: crate::protocol::market_mod::Market::new(address, Arc::clone(client)),
+            contract: crate::protocol::market_protocol::MarketProtocol::new(
+                address,
+                Arc::clone(client),
+            ),
             interest_rate_model: Default::default(),
             price: Default::default(),
             penalty_rate: Default::default(),
