@@ -120,6 +120,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                 Ok(Some(data)) => {
                     match data.action {
                         LiquidationAction::Update => {
+                            println!("Updating liquidation data");
                             liquidations = data
                                 .liquidations
                                 .into_iter()
@@ -158,7 +159,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                 Ok(None) => {}
                 Err(_) => {
                     if let Some(liquidation) = &mut liquidations_iter {
+                        println!("Check for next to liquidate");
                         if let Some((_, (account, repay, age))) = liquidation.next() {
+                            println!("Found");
                             if backup == 0 || *age > backup {
                                 if backup > 0 {
                                     println!("backup liquidation - {}", age);
@@ -181,6 +184,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
                                 println!("backup - not old enough: {}", age);
                             }
                         } else {
+                            println!("Not found");
                             liquidations_iter = None;
                         }
                     }

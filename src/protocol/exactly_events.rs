@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use ethers::{
     abi::{Error, RawLog},
     prelude::EthLogDecode,
@@ -18,8 +17,17 @@ use crate::protocol::{
     FloatingDebtUpdateFilter, InterestRateModelSetFilter, LiquidateFilter,
     LiquidationIncentiveSetFilter, MarketEnteredFilter, MarketExitedFilter, MarketListedFilter,
     MarketUpdateFilter, MaxFuturePoolsSetFilter, PausedFilter, PenaltyRateSetFilter,
-    PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter, ReserveFactorSetFilter, SeizeFilter,
+    PriceFeedSetFilter, ProtocolContactsSetFilter, RepayAtMaturityFilter, RepayFilter,
+    ReserveFactorSetFilter, ResumedFilter, SeizeFilter, StakingLimitRemovedFilter,
+    StakingLimitSetFilter, StakingPausedFilter, StakingResumedFilter, StoppedFilter,
     TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
+    WithdrawalCredentialsSetFilter, WithdrawalFilter,
+};
+use crate::protocol::{market_protocol::ApprovalFilter, ElrewardsReceivedFilter};
+use crate::protocol::{
+    market_protocol::TransferFilter, ElrewardsVaultSetFilter, ElrewardsWithdrawalLimitSetFilter,
+    FeeDistributionSetFilter, FeeSetFilter, RecoverToVaultFilter, ScriptResultFilter,
+    SharesBurntFilter, SubmittedFilter, TransferSharesFilter, UnbufferedFilter,
 };
 use aggregator_mod::NewTransmissionFilter;
 
@@ -74,7 +82,17 @@ pub enum ExactlyEvents {
     NewRoundFilter(NewRoundFilter),
     NewTransmissionFilter(NewTransmissionFilter),
 
-    Ignored,
+    UpdateLidoPriceFilter,
+
+    IgnoredFilter,
+}
+
+macro_rules! map_filter {
+    ($ext_filter:ident, $exactly_filter:ident, $log:ident) => {
+        if let Ok(_) = $ext_filter::decode_log($log) {
+            return Ok(ExactlyEvents::$exactly_filter);
+        }
+    };
 }
 
 impl EthLogDecode for ExactlyEvents {
@@ -218,6 +236,33 @@ impl EthLogDecode for ExactlyEvents {
             return Ok(ExactlyEvents::NewTransmissionFilter(decoded));
         }
 
+        // Lido events to update price
+        map_filter!(ElrewardsReceivedFilter, UpdateLidoPriceFilter, log);
+        map_filter!(ElrewardsVaultSetFilter, UpdateLidoPriceFilter, log);
+        map_filter!(
+            ElrewardsWithdrawalLimitSetFilter,
+            UpdateLidoPriceFilter,
+            log
+        );
+        map_filter!(FeeDistributionSetFilter, UpdateLidoPriceFilter, log);
+        map_filter!(FeeSetFilter, UpdateLidoPriceFilter, log);
+        map_filter!(RecoverToVaultFilter, UpdateLidoPriceFilter, log);
+        map_filter!(ScriptResultFilter, UpdateLidoPriceFilter, log);
+        map_filter!(SharesBurntFilter, UpdateLidoPriceFilter, log);
+        map_filter!(UnbufferedFilter, UpdateLidoPriceFilter, log);
+        map_filter!(WithdrawalFilter, UpdateLidoPriceFilter, log);
+
+        map_filter!(SubmittedFilter, IgnoredFilter, log);
+        map_filter!(TransferSharesFilter, IgnoredFilter, log);
+        map_filter!(ResumedFilter, IgnoredFilter, log);
+        map_filter!(ProtocolContactsSetFilter, IgnoredFilter, log);
+        map_filter!(StakingLimitRemovedFilter, IgnoredFilter, log);
+        map_filter!(StakingLimitSetFilter, IgnoredFilter, log);
+        map_filter!(StakingPausedFilter, IgnoredFilter, log);
+        map_filter!(StakingResumedFilter, IgnoredFilter, log);
+        map_filter!(StoppedFilter, IgnoredFilter, log);
+        map_filter!(WithdrawalCredentialsSetFilter, IgnoredFilter, log);
+
         let ignored_events: Vec<H256> = [
             "0xe8ec50e5150ae28ae37e493ff389ffab7ffaec2dc4dccfca03f12a3de29d12b2",
             "0xd0d9486a2c673e2a4b57fc82e4c8a556b3e2b82dd5db07e2c04a920ca0f469b6",
@@ -237,7 +282,7 @@ impl EthLogDecode for ExactlyEvents {
             })
             .is_some()
         {
-            return Ok(ExactlyEvents::Ignored);
+            return Ok(ExactlyEvents::IgnoredFilter);
         };
 
         println!("Missing event: {:?}", log);

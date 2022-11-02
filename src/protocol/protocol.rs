@@ -66,7 +66,7 @@ struct ContractKey {
 macro_rules! compare {
     ($label:expr, $account:expr, $market:expr, $ref:expr, $val:expr) => {
         if $ref != $val {
-            println!("{}@{}.{}", $account, $market, $label);
+            println!("{:?}@{}.{}", $account, $market, $label);
             println!("reference: {:#?}", $ref);
             println!("    value: {:#?}", $val);
             false
@@ -94,6 +94,7 @@ pub struct Protocol<M, S> {
     token_pairs: Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>>,
     tokens: Arc<HashSet<Address>>,
     price_decimals: U256,
+    ignore_transfers_from: HashSet<Address>,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for Protocol<M, S> {
@@ -204,6 +205,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             tokens,
             token_pairs,
             price_decimals: U256::zero(),
+            ignore_transfers_from: HashSet::new(),
         })
     }
 
@@ -386,6 +388,38 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         //     return Err(Arc::try_unwrap(service).unwrap().into_inner());
         // }
         Ok(Arc::try_unwrap(service).unwrap().into_inner())
+    }
+
+    async fn update_price_lido(&mut self, lido_contract: Address, block: U64) -> Result<()> {
+        let markets = self.markets.values_mut().fold(
+            Vec::<&mut Market<M, S>>::new(),
+            |mut markets, market| {
+                if market.wrapper == lido_contract {
+                    markets.push(market);
+                }
+                markets
+            },
+        );
+        for market in markets {
+            let mut multicall =
+                Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+            multicall.add_call(
+                PriceFeedWrapper::new(market.price_feed, Arc::clone(&self.client)).latest_answer(),
+                false,
+            );
+            let price_feed = PriceFeedLido::new(market.wrapper, Arc::clone(&self.client));
+            let conversion_selector_method: ContractCall<SignerMiddleware<M, S>, U256> =
+                price_feed.method_hash(market.conversion_selector, market.base_unit)?;
+            multicall.add_call(conversion_selector_method, false);
+            let (main_price, rate): (U256, U256) = multicall
+                .version(MulticallVersion::Multicall)
+                .block(block)
+                .call()
+                .await?;
+            market.price = rate.mul_div_down(main_price, market.base_unit)
+                * U256::exp10(18 - self.price_decimals.as_usize());
+        }
+        Ok(())
     }
 
     async fn update_prices(&mut self, block: U64) -> Result<()> {
@@ -582,6 +616,11 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             }
 
             ExactlyEvents::TransferFilter(data) => {
+                if self.ignore_transfers_from.contains(&meta.address) {
+                    // self.update_price_lido(meta.address, meta.block_number)
+                    //     .await?;
+                    return Ok(LogIterating::NextLog);
+                }
                 if data.to != Address::zero() {
                     self.accounts
                         .entry(data.to)
@@ -746,7 +785,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 } else {
                     price_feed_address
                 };
-
                 self.contracts_to_listen.insert(
                     ContractKey {
                         address: data.market,
@@ -767,6 +805,14 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     market.wrapper = wrapper;
                     market.conversion_selector = conversion_selector;
                     market.base_unit = base_unit;
+                    self.ignore_transfers_from.insert(wrapper);
+                    self.contracts_to_listen.insert(
+                        ContractKey {
+                            address: wrapper,
+                            kind: ContractKeyKind::PriceFeed,
+                        },
+                        wrapper,
+                    );
                 }
                 self.update_prices(meta.block_number).await?;
                 self.last_sync = (
@@ -797,24 +843,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                         .or_insert_with_key(|key| Market::new(*key, &self.client));
 
                     let price: U256 = if market.wrapper != Address::zero() {
-                        let mut multicall = Multicall::<SignerMiddleware<M, S>>::new(
-                            Arc::clone(&self.client),
-                            None,
-                        )
-                        .await?;
-                        multicall.add_call(
-                            PriceFeedWrapper::new(market.price_feed, Arc::clone(&self.client))
-                                .latest_answer(),
-                        );
-                        let price_feed =
-                            PriceFeedLido::new(market.wrapper, Arc::clone(&self.client));
-                        let conversion_selector_method: ContractCall<SignerMiddleware<M, S>, U256> =
-                            price_feed.method_hash(market.conversion_selector, market.base_unit)?;
-                        multicall.add_call(conversion_selector_method);
-                        let (main_price, rate): (U256, U256) =
-                            multicall.block(meta.block_number).call().await?;
-                        rate.mul_div_down(main_price, market.base_unit)
-                            * U256::exp10(18 - self.price_decimals.as_usize())
+                        self.update_price_lido(meta.address, meta.block_number)
+                            .await?;
+                        return Ok(LogIterating::NextLog);
                     } else {
                         data.current.into_raw() * U256::exp10(18 - self.price_decimals.as_usize())
                     };
@@ -879,6 +910,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     .price_decimals()
                     .block(meta.block_number)
                     .call()
+                    .await?;
+            }
+            ExactlyEvents::UpdateLidoPriceFilter => {
+                self.update_price_lido(meta.address, meta.block_number)
                     .await?;
             }
             _ => {
@@ -1248,6 +1283,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             return Ok(());
         };
         for (address, previewer_account) in previewer_accounts {
+            println!("Comparing account {:#?}", address);
             let account = &accounts[address];
             success &= compare!(
                 "length",
@@ -1537,6 +1573,9 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                 v[0].clone().into_uint().unwrap(),
                 v[1].clone().into_uint().unwrap(),
             );
+            println!("account            : {}", account);
+            println!("adjusted collateral: {}", adjusted_collateral);
+            println!("adjusted debt      : {}", adjusted_debt);
             if adjusted_debt > U256::zero() {
                 let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
                 println!("health factor      : {}", previewer_hf);
@@ -1553,10 +1592,10 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             } else {
                 println!(
                     "Account: {} collateral: {} debt: {}",
-                    accounts_with_borrows[i], adjusted_collateral, adjusted_debt
+                    &account, adjusted_collateral, adjusted_debt
                 );
                 println!("***************");
-                println!("Account: {:#?}", self.accounts[&accounts_with_borrows[i]]);
+                println!("Account: {:#?}", self.accounts[&account]);
                 println!("***************");
             }
         }
