@@ -29,7 +29,7 @@ use tokio::sync::Mutex;
 use tokio::time;
 use tokio_stream::StreamExt;
 
-use super::{LiquidationIncentive, Liquidator, MarketAccount, Previewer, PriceFeedWrapper};
+use super::{LiquidationIncentive, MarketAccount, Previewer, PriceFeedWrapper};
 
 #[cfg(feature = "liquidation-stats")]
 use crate::protocol::LiquidateFilter;
@@ -77,7 +77,7 @@ macro_rules! compare {
 }
 
 // #[derive(Debug)]
-pub struct Protocol<M, S> {
+pub struct Protocol<M, W, S> {
     client: Arc<SignerMiddleware<M, S>>,
     last_sync: (U64, i128, i128),
     previewer: Previewer<SignerMiddleware<M, S>>,
@@ -89,7 +89,7 @@ pub struct Protocol<M, S> {
     comparison_enabled: bool,
     liquidation_incentive: LiquidationIncentive,
     market_weth_address: Address,
-    liquidation: Arc<Mutex<Liquidation<M, S>>>,
+    liquidation: Arc<Mutex<Liquidation<M, W, S>>>,
     liquidation_sender: Sender<LiquidationData>,
     token_pairs: Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>>,
     tokens: Arc<HashSet<Address>>,
@@ -98,51 +98,45 @@ pub struct Protocol<M, S> {
     repay_offset: U256,
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for Protocol<M, S> {
+impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> std::fmt::Debug
+    for Protocol<M, W, S>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CreditService").finish()
     }
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
+impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Protocol<M, W, S> {
     async fn get_contracts(
         client: Arc<SignerMiddleware<M, S>>,
-        client_relayer: Arc<SignerMiddleware<M, S>>,
         config: &Config,
     ) -> (
         u64,
         Auditor<SignerMiddleware<M, S>>,
         Previewer<SignerMiddleware<M, S>>,
-        Liquidator<SignerMiddleware<M, S>>,
     ) {
-        let (auditor_address, _, deployed_block) = Protocol::<M, S>::parse_abi(&format!(
+        let (auditor_address, _, deployed_block) = Protocol::<M, W, S>::parse_abi(&format!(
             "node_modules/@exactly-protocol/protocol/deployments/{}/Auditor.json",
             config.chain_id_name
         ));
 
-        let (previewer_address, _, _) = Protocol::<M, S>::parse_abi(&format!(
+        let (previewer_address, _, _) = Protocol::<M, W, S>::parse_abi(&format!(
             "node_modules/@exactly-protocol/protocol/deployments/{}/Previewer.json",
-            config.chain_id_name
-        ));
-
-        let (liquidator_address, _, _) = Protocol::<M, S>::parse_abi(&format!(
-            "deployments/{}/Liquidator.json",
             config.chain_id_name
         ));
 
         let auditor = Auditor::new(auditor_address, Arc::clone(&client));
         let previewer = Previewer::new(previewer_address, Arc::clone(&client));
-        let liquidator = Liquidator::new(liquidator_address, Arc::clone(&client_relayer));
-        (deployed_block, auditor, previewer, liquidator)
+        (deployed_block, auditor, previewer)
     }
 
     pub async fn new(
         client: Arc<SignerMiddleware<M, S>>,
-        client_relayer: Arc<SignerMiddleware<M, S>>,
+        client_relayer: Arc<SignerMiddleware<W, S>>,
         config: &Config,
-    ) -> Result<Protocol<M, S>> {
-        let (deployed_block, auditor, previewer, liquidator) =
-            Self::get_contracts(Arc::clone(&client), Arc::clone(&client_relayer), &config).await;
+    ) -> Result<Protocol<M, W, S>> {
+        let (deployed_block, auditor, previewer) =
+            Self::get_contracts(Arc::clone(&client), &config).await;
 
         let auditor_markets = auditor.all_markets().call().await?;
         let mut markets = HashMap::<Address, Market<M, S>>::new();
@@ -170,14 +164,15 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
 
         let liquidation = Arc::new(Mutex::new(Liquidation::new(
             Arc::clone(&client),
+            Arc::clone(&client_relayer),
             &config.token_pairs,
-            liquidator,
             previewer.clone(),
             auditor.clone(),
             market_weth_address,
             config.backup,
             config.liquidate_unprofitable,
             config.repay_offset,
+            config.chain_id_name.clone(),
         )));
 
         let liquidation_lock = liquidation.lock().await;
@@ -215,15 +210,15 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
     pub async fn update_client(
         &mut self,
         client: Arc<SignerMiddleware<M, S>>,
-        client_relayer: Arc<SignerMiddleware<M, S>>,
+        client_relayer: Arc<SignerMiddleware<W, S>>,
         config: &Config,
     ) {
-        let (_, auditor, previewer, liquidator) =
-            Self::get_contracts(Arc::clone(&client), Arc::clone(&client_relayer), config).await;
+        let (_, auditor, previewer) = Self::get_contracts(Arc::clone(&client), config).await;
         self.client = Arc::clone(&client);
         self.auditor = auditor;
         self.previewer = previewer;
-        (*self.liquidation.lock().await).set_liquidator(liquidator);
+        (*self.liquidation.lock().await)
+            .set_liquidator(Arc::clone(&client_relayer), config.chain_id_name.clone());
         for market in self.markets.values_mut() {
             let address = market.contract.address();
             market.contract =
@@ -1019,7 +1014,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
         let hf = Self::compute_hf(&self.markets, account, to_timestamp);
         if let Ok((hf, _, _, repay)) = hf {
             if hf < math::WAD && repay.total_adjusted_debt != U256::zero() {
-                if let Some((profitable, _, _, _)) = Liquidation::<M, S>::is_profitable(
+                if let Some((profitable, _, _, _)) = Liquidation::<M, W, S>::is_profitable(
                     &repay,
                     &self.liquidation_incentive,
                     *last_gas_price,

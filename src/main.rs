@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use ethers::prelude::k256::ecdsa::SigningKey;
 use ethers::prelude::{Provider, Signer, SignerMiddleware, Wallet, Ws};
+use ethers::providers::Http;
 use eyre::Result;
 
 use crate::protocol::config::Config;
@@ -13,19 +14,27 @@ mod protocol;
 
 async fn create_client(
     config: &Config,
-    eth_provider_rpc: &String,
-) -> Arc<SignerMiddleware<Provider<Ws>, Wallet<SigningKey>>> {
-    loop {
-        let provider_result = Provider::<Ws>::connect(eth_provider_rpc.clone()).await;
-        let provider = if let Ok(provider) = provider_result {
-            provider
-        } else {
-            println!("It wasn't possible to connect to the provider");
-            continue;
-        };
-        let wallet = config.wallet.clone().with_chain_id(config.chain_id);
-        return Arc::new(SignerMiddleware::new(provider, wallet));
-    }
+) -> (
+    Arc<SignerMiddleware<Provider<Ws>, Wallet<SigningKey>>>,
+    Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
+) {
+    let provider_ws = loop {
+        let provider_result = Provider::<Ws>::connect(config.rpc_provider.clone()).await;
+        if let Ok(provider) = provider_result {
+            break provider;
+        }
+    };
+    let provider_https = loop {
+        let provider_result = Provider::<Http>::try_from(config.rpc_provider_relayer.clone());
+        if let Ok(provider) = provider_result {
+            break provider;
+        }
+    };
+    let wallet = config.wallet.clone().with_chain_id(config.chain_id);
+    return (
+        Arc::new(SignerMiddleware::new(provider_ws, wallet.clone())),
+        Arc::new(SignerMiddleware::new(provider_https, wallet)),
+    );
 }
 
 #[tokio::main]
@@ -39,12 +48,10 @@ async fn main() -> Result<()> {
 
     let config = Config::default();
 
-    let eth_rpc_provider = config.rpc_provider.clone();
-    let eth_rpc_provider_relayer = config.rpc_provider_relayer.clone();
-
     dbg!(&config);
 
-    let mut credit_service: Option<Protocol<Provider<Ws>, Wallet<SigningKey>>> = None;
+    let mut credit_service: Option<Protocol<Provider<Ws>, Provider<Http>, Wallet<SigningKey>>> =
+        None;
     let mut update_client = false;
     let mut last_client = None;
     loop {
@@ -78,10 +85,7 @@ async fn main() -> Result<()> {
                 }
             }
         } else {
-            last_client = Some((
-                create_client(&config, &eth_rpc_provider).await,
-                create_client(&config, &eth_rpc_provider_relayer).await,
-            ));
+            last_client = Some(create_client(&config).await);
         }
     }
     // Ok(())

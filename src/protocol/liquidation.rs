@@ -16,6 +16,7 @@ use tokio::time;
 
 use super::{
     protocol, Account, Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer,
+    Protocol,
 };
 
 #[derive(Default, Debug)]
@@ -59,11 +60,11 @@ pub struct LiquidationData {
     pub price_decimals: U256,
 }
 
-pub struct Liquidation<M, S> {
+pub struct Liquidation<M, W, S> {
     pub client: Arc<SignerMiddleware<M, S>>,
     token_pairs: Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>>,
     tokens: Arc<HashSet<Address>>,
-    liquidator: Liquidator<SignerMiddleware<M, S>>,
+    liquidator: Liquidator<SignerMiddleware<W, S>>,
     previewer: Previewer<SignerMiddleware<M, S>>,
     auditor: Auditor<SignerMiddleware<M, S>>,
     market_weth_address: Address,
@@ -72,21 +73,23 @@ pub struct Liquidation<M, S> {
     repay_offset: U256,
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
+impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liquidation<M, W, S> {
     pub fn new(
         client: Arc<SignerMiddleware<M, S>>,
+        client_relay: Arc<SignerMiddleware<W, S>>,
         token_pairs: &str,
-        liquidator: Liquidator<SignerMiddleware<M, S>>,
         previewer: Previewer<SignerMiddleware<M, S>>,
         auditor: Auditor<SignerMiddleware<M, S>>,
         weth_address: Address,
         backup: u32,
         liquidate_unprofitable: bool,
         repay_offset: U256,
+        chain_id_name: String,
     ) -> Self {
         let (token_pairs, tokens) = parse_token_pairs(token_pairs);
         let token_pairs = Arc::new(token_pairs);
         let tokens = Arc::new(tokens);
+        let liquidator = Self::get_contracts(Arc::clone(&client_relay), chain_id_name);
         Self {
             client,
             token_pairs,
@@ -99,6 +102,17 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
             liquidate_unprofitable,
             repay_offset,
         }
+    }
+
+    fn get_contracts(
+        client_relayer: Arc<SignerMiddleware<W, S>>,
+        chain_id_name: String,
+    ) -> Liquidator<SignerMiddleware<W, S>> {
+        let (liquidator_address, _, _) = Protocol::<M, W, S>::parse_abi(&format!(
+            "deployments/{}/Liquidator.json",
+            chain_id_name
+        ));
+        Liquidator::new(liquidator_address, Arc::clone(&client_relayer))
     }
 
     pub fn get_tokens(&self) -> Arc<HashSet<Address>> {
@@ -568,8 +582,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> Liquidation<M, S> {
         close_factor
     }
 
-    pub fn set_liquidator(&mut self, liquidator: Liquidator<SignerMiddleware<M, S>>) {
-        self.liquidator = liquidator;
+    pub fn set_liquidator(&mut self, client_relay: Arc<SignerMiddleware<W, S>>, chain_id_name: String) {
+        self.liquidator = Self::get_contracts(Arc::clone(&client_relay), chain_id_name);
     }
 }
 
