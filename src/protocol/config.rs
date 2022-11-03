@@ -1,5 +1,8 @@
 extern crate dotenv;
+
 use ethers::prelude::{coins_bip39::English, k256::ecdsa::SigningKey, MnemonicBuilder, Wallet};
+use ethers::types::U256;
+use ethers::utils;
 use std::env;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -15,6 +18,7 @@ pub struct Config {
     pub token_pairs: String,
     pub backup: u32,
     pub liquidate_unprofitable: bool,
+    pub repay_offset: U256,
 }
 
 impl Default for Config {
@@ -62,6 +66,9 @@ impl Default for Config {
 
         let token_pairs = env::var("TOKEN_PAIRS").unwrap_or("".into());
 
+        let repay_offset =
+            utils::parse_units(&env::var("REPAY_OFFSET").unwrap_or("0.001".into()), 18).unwrap();
+
         let liquidate_unprofitable =
             Arc::new(env::var("LIQUIDATE_UNPROFITABLE").unwrap_or("false".into()))
                 .parse::<bool>()
@@ -77,6 +84,7 @@ impl Default for Config {
             token_pairs,
             backup,
             liquidate_unprofitable,
+            repay_offset,
         }
     }
 }

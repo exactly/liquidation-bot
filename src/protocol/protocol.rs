@@ -35,7 +35,7 @@ use super::{LiquidationIncentive, Liquidator, MarketAccount, Previewer, PriceFee
 use crate::protocol::LiquidateFilter;
 
 const DEFAULT_GAS_PRICE: U256 = math::make_u256(10_000u64);
-const BASE_FEED: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+pub const BASE_FEED: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
 enum ContractKeyKind {
@@ -95,6 +95,7 @@ pub struct Protocol<M, S> {
     tokens: Arc<HashSet<Address>>,
     price_decimals: U256,
     ignore_transfers_from: HashSet<Address>,
+    repay_offset: U256,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> std::fmt::Debug for Protocol<M, S> {
@@ -176,6 +177,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             market_weth_address,
             config.backup,
             config.liquidate_unprofitable,
+            config.repay_offset,
         )));
 
         let liquidation_lock = liquidation.lock().await;
@@ -206,6 +208,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
             token_pairs,
             price_decimals: U256::zero(),
             ignore_transfers_from: HashSet::new(),
+            repay_offset: config.repay_offset,
         })
     }
 
@@ -998,6 +1001,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                         .iter()
                         .map(|(address, market)| (*address, market.price_feed_wrapper))
                         .collect(),
+                    price_decimals: self.price_decimals,
                 })
                 .await?;
         }
@@ -1022,6 +1026,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Protocol<M, S> {
                     self.markets[&self.market_weth_address].price,
                     &self.token_pairs,
                     &self.tokens,
+                    self.repay_offset,
                 ) {
                     if profitable {
                         liquidations.insert(address.clone(), (account.clone(), repay));
