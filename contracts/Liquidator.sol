@@ -22,7 +22,11 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
 
   mapping(address => bool) public callers;
 
-  constructor(address owner_, address factory_, ISwapRouter swapRouter_) Auth(owner_, this) {
+  constructor(
+    address owner_,
+    address factory_,
+    ISwapRouter swapRouter_
+  ) Auth(owner_, this) {
     factory = factory_;
     swapRouter = swapRouter_;
   }
@@ -33,7 +37,8 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     address borrower,
     uint256 maxRepay,
     address poolPair,
-    uint24 fee
+    uint24 fee,
+    uint24 pairFee
   ) external requiresAuth {
     ERC20 repayAsset = repayMarket.asset();
     uint256 availableRepay = repayAsset.balanceOf(address(this));
@@ -43,11 +48,35 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
       repayMarket.liquidate(borrower, maxRepay, seizeMarket);
     } else {
       uint256 flashBorrow = maxRepay - availableRepay;
-      PoolAddress.PoolKey memory poolKey = PoolAddress.getPoolKey(address(repayAsset), poolPair, fee);
       if (repayMarket != seizeMarket) {
-        bytes memory data = abi.encode(
-          SwapCallbackData({ repayMarket: repayMarket, seizeMarket: seizeMarket, borrower: borrower, fee: fee })
-        );
+        PoolAddress.PoolKey memory poolKey;
+        bytes memory data;
+        if (poolPair == address(0)) {
+          ERC20 seizeAsset = seizeMarket.asset();
+          poolKey = PoolAddress.getPoolKey(address(repayAsset), address(seizeAsset), fee);
+          data = abi.encode(
+            SwapCallbackData({
+              repayMarket: repayMarket,
+              seizeMarket: seizeMarket,
+              borrower: borrower,
+              poolPair: address(seizeAsset),
+              fee: fee,
+              pairFee: 0
+            })
+          );
+        } else {
+          poolKey = PoolAddress.getPoolKey(address(repayAsset), poolPair, fee);
+          data = abi.encode(
+            SwapCallbackData({
+              repayMarket: repayMarket,
+              seizeMarket: seizeMarket,
+              borrower: borrower,
+              poolPair: poolPair,
+              fee: fee,
+              pairFee: pairFee
+            })
+          );
+        }
         IUniswapV3Pool(PoolAddress.computeAddress(factory, poolKey)).swap(
           address(this),
           address(repayAsset) == poolKey.token1,
@@ -56,6 +85,7 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
           data
         );
       } else {
+        PoolAddress.PoolKey memory poolKey = PoolAddress.getPoolKey(address(repayAsset), poolPair, fee);
         bytes memory data = abi.encode(
           FlashCallbackData({
             repayMarket: repayMarket,
@@ -83,17 +113,53 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     bytes calldata data
   ) external {
     SwapCallbackData memory s = abi.decode(data, (SwapCallbackData));
-    ERC20 repayAsset = s.repayMarket.asset();
     ERC20 seizeAsset = s.seizeMarket.asset();
-    PoolAddress.PoolKey memory poolKey = PoolAddress.getPoolKey(address(repayAsset), address(seizeAsset), s.fee);
+    if (s.borrower != address(0)) {
+      ERC20 repayAsset = s.repayMarket.asset();
+      PoolAddress.PoolKey memory poolKey = PoolAddress.getPoolKey(address(repayAsset), s.poolPair, s.fee);
+      require(msg.sender == PoolAddress.computeAddress(factory, poolKey));
 
-    require(msg.sender == PoolAddress.computeAddress(factory, poolKey));
+      uint256 maxRepay = uint256(-(address(repayAsset) == poolKey.token0 ? amount0Delta : amount1Delta));
+      repayAsset.safeApprove(address(s.repayMarket), maxRepay);
+      s.repayMarket.liquidate(s.borrower, maxRepay, s.seizeMarket);
+      if (s.pairFee > 0) {
+        PoolAddress.PoolKey memory swapPoolKey = PoolAddress.getPoolKey(address(seizeAsset), s.poolPair, s.pairFee);
+        IUniswapV3Pool(PoolAddress.computeAddress(factory, swapPoolKey)).swap(
+          address(this),
+          address(seizeAsset) == swapPoolKey.token0,
+          -int256(s.poolPair == poolKey.token0 ? amount0Delta : amount1Delta),
+          address(seizeAsset) == swapPoolKey.token0 ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1,
+          abi.encode(
+            SwapCallbackData({
+              repayMarket: IMarket(address(0)),
+              seizeMarket: s.seizeMarket,
+              borrower: address(0),
+              poolPair: s.poolPair,
+              fee: 0,
+              pairFee: s.pairFee
+            })
+          )
+        );
 
-    uint256 maxRepay = uint256(-(address(repayAsset) == poolKey.token0 ? amount0Delta : amount1Delta));
-    repayAsset.safeApprove(address(s.repayMarket), maxRepay);
-    s.repayMarket.liquidate(s.borrower, maxRepay, s.seizeMarket);
+        ERC20(s.poolPair).safeTransfer(
+          msg.sender,
+          uint256(address(s.poolPair) == poolKey.token0 ? amount0Delta : amount1Delta)
+        );
+      } else {
+        seizeAsset.safeTransfer(
+          msg.sender,
+          uint256(address(seizeAsset) == poolKey.token0 ? amount0Delta : amount1Delta)
+        );
+      }
+    } else {
+      PoolAddress.PoolKey memory swapPoolKey = PoolAddress.getPoolKey(address(seizeAsset), s.poolPair, s.pairFee);
+      require(msg.sender == PoolAddress.computeAddress(factory, swapPoolKey));
 
-    seizeAsset.safeTransfer(msg.sender, uint256(address(seizeAsset) == poolKey.token0 ? amount0Delta : amount1Delta));
+      seizeAsset.safeTransfer(
+        msg.sender,
+        uint256(address(seizeAsset) == swapPoolKey.token0 ? amount0Delta : amount1Delta)
+      );
+    }
   }
 
   function uniswapV3FlashCallback(
@@ -135,7 +201,11 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     );
   }
 
-  function transfer(ERC20 asset, address to, uint256 amount) external requiresAuth {
+  function transfer(
+    ERC20 asset,
+    address to,
+    uint256 amount
+  ) external requiresAuth {
     asset.safeTransfer(to, amount);
   }
 
@@ -160,7 +230,9 @@ struct SwapCallbackData {
   IMarket repayMarket;
   IMarket seizeMarket;
   address borrower;
+  address poolPair;
   uint24 fee;
+  uint24 pairFee;
 }
 
 struct FlashCallbackData {
