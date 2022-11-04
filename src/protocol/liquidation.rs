@@ -68,6 +68,7 @@ pub struct Liquidation<M, W, S> {
     previewer: Previewer<SignerMiddleware<M, S>>,
     auditor: Auditor<SignerMiddleware<M, S>>,
     market_weth_address: Address,
+    weth_address: Address,
     backup: u32,
     liquidate_unprofitable: bool,
     repay_offset: U256,
@@ -80,6 +81,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         token_pairs: &str,
         previewer: Previewer<SignerMiddleware<M, S>>,
         auditor: Auditor<SignerMiddleware<M, S>>,
+        market_weth_address: Address,
         weth_address: Address,
         backup: u32,
         liquidate_unprofitable: bool,
@@ -97,7 +99,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             liquidator,
             previewer,
             auditor,
-            market_weth_address: weth_address,
+            market_weth_address,
+            weth_address,
             backup,
             liquidate_unprofitable,
             repay_offset,
@@ -243,7 +246,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                 )
                 .await;
 
-            let (profitable, max_repay, pool_pair, fee) = match response {
+            let (profitable, max_repay, pool_pair, pair_fee, fee) = match response {
                 Some(response) => response,
                 None => return Ok(()),
             };
@@ -269,6 +272,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             println!("borrower  : {:#?}", account.address);
             println!("max_repay : {:#?}", max_repay);
             println!("pool_pair : {:#?}", pool_pair);
+            println!("pair_fee  : {:#?}", pair_fee);
             println!("fee       : {:#?}", fee);
 
             let func = self.liquidator.liquidate(
@@ -277,6 +281,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                 account.address,
                 max_repay,
                 pool_pair,
+                pair_fee,
                 fee,
             );
             println!("func: {:#?}", func);
@@ -299,7 +304,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         price_feeds: &HashMap<Address, Address>,
         assets: &HashMap<Address, Address>,
         price_decimals: U256,
-    ) -> Option<(bool, U256, Address, u32)> {
+    ) -> Option<(bool, U256, Address, u32, u32)> {
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
@@ -381,6 +386,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             &self.token_pairs,
             &self.tokens,
             self.repay_offset,
+            self.weth_address,
         )
     }
 
@@ -445,30 +451,34 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         token_pairs: &HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
         tokens: &HashSet<Address>,
         repay_offset: U256,
-    ) -> Option<(bool, U256, Address, u32)> {
+        swap_route: Address,
+    ) -> Option<(bool, U256, Address, u32, u32)> {
         let max_repay = Self::max_repay_assets(repay, liquidation_incentive, U256::MAX)
             .mul_wad_down(math::WAD + U256::exp10(14))
             + repay_offset.mul_div_up(U256::exp10(repay.decimals as usize), repay.price);
-        let (pool_pair, fee): (Address, u32) = Self::get_flash_pair(repay, token_pairs, tokens);
+        let (pool_pair, pair_fee, fee): (Address, u32, u32) =
+            Self::get_flash_pair(repay, token_pairs, tokens, swap_route);
         let profit = Self::max_profit(repay, max_repay, liquidation_incentive);
         let cost = Self::max_cost(
             repay,
             max_repay,
             liquidation_incentive,
+            U256::from(pair_fee),
             U256::from(fee),
             last_gas_price,
             U256::from(1500u128),
             eth_price,
         );
         let profitable = profit > cost && profit - cost > math::WAD / U256::exp10(16);
-        Some((profitable, max_repay, pool_pair, fee))
+        Some((profitable, max_repay, pool_pair, pair_fee, fee))
     }
 
     fn get_flash_pair(
         repay: &Repay,
         token_pairs: &HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
         tokens: &HashSet<Address>,
-    ) -> (Address, u32) {
+        swap_route: Address,
+    ) -> (Address, u32, u32) {
         let collateral = repay.collateral_asset_address;
         let repay = repay.repay_asset_address;
 
@@ -477,9 +487,21 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
 
         if collateral != repay {
             if let Some(pair) = token_pairs.get(&ordered_addresses(collateral, repay)) {
-                return (collateral, pair.peek().unwrap().0);
+                return (Address::zero(), pair.peek().unwrap().0, 0);
+            } else {
+                return match (
+                    token_pairs.get(&ordered_addresses(swap_route, repay)),
+                    token_pairs.get(&ordered_addresses(collateral, swap_route)),
+                ) {
+                    (Some(pair_fee), Some(fee)) => (
+                        swap_route,
+                        pair_fee.peek().unwrap().0,
+                        fee.peek().unwrap().0,
+                    ),
+
+                    _ => (Address::zero(), 0, 0),
+                };
             }
-            return (collateral, 0);
         }
 
         for token in tokens {
@@ -494,7 +516,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                 }
             }
         }
-        (pair_contract, lowest_fee)
+        (pair_contract, lowest_fee, 0)
     }
 
     fn max_repay_assets(
@@ -541,6 +563,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         repay: &Repay,
         max_repay: U256,
         liquidation_incentive: &LiquidationIncentive,
+        swap_pair_fee: U256,
         swap_fee: U256,
         gas_price: U256,
         gas_cost: U256,
@@ -549,6 +572,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         let max_repay = max_repay.mul_div_down(repay.price, U256::exp10(repay.decimals as usize));
         max_repay.mul_wad_down(U256::from(liquidation_incentive.lenders))
             + max_repay.mul_wad_down(swap_fee * U256::from(U256::exp10(12)))
+            + max_repay.mul_wad_down(swap_pair_fee * U256::from(U256::exp10(12)))
             + (gas_price * gas_cost).mul_wad_down(eth_price)
     }
 
@@ -582,7 +606,11 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         close_factor
     }
 
-    pub fn set_liquidator(&mut self, client_relay: Arc<SignerMiddleware<W, S>>, chain_id_name: String) {
+    pub fn set_liquidator(
+        &mut self,
+        client_relay: Arc<SignerMiddleware<W, S>>,
+        chain_id_name: String,
+    ) {
         self.liquidator = Self::get_contracts(Arc::clone(&client_relay), chain_id_name);
     }
 }
