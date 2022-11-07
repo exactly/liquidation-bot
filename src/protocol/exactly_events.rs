@@ -84,13 +84,13 @@ pub enum ExactlyEvents {
 
     UpdateLidoPriceFilter,
 
-    IgnoredFilter,
+    IgnoredFilter(Option<H256>),
 }
 
 macro_rules! map_filter {
-    ($ext_filter:ident, $exactly_filter:ident, $log:ident) => {
+    ($ext_filter:ident, $exactly_filter:expr, $log:ident) => {
         if let Ok(_) = $ext_filter::decode_log($log) {
-            return Ok(ExactlyEvents::$exactly_filter);
+            return Ok($exactly_filter);
         }
     };
 }
@@ -237,31 +237,29 @@ impl EthLogDecode for ExactlyEvents {
         }
 
         // Lido events to update price
-        map_filter!(ElrewardsReceivedFilter, UpdateLidoPriceFilter, log);
-        map_filter!(ElrewardsVaultSetFilter, UpdateLidoPriceFilter, log);
-        map_filter!(
-            ElrewardsWithdrawalLimitSetFilter,
-            UpdateLidoPriceFilter,
-            log
-        );
-        map_filter!(FeeDistributionSetFilter, UpdateLidoPriceFilter, log);
-        map_filter!(FeeSetFilter, UpdateLidoPriceFilter, log);
-        map_filter!(RecoverToVaultFilter, UpdateLidoPriceFilter, log);
-        map_filter!(ScriptResultFilter, UpdateLidoPriceFilter, log);
-        map_filter!(SharesBurntFilter, UpdateLidoPriceFilter, log);
-        map_filter!(UnbufferedFilter, UpdateLidoPriceFilter, log);
-        map_filter!(WithdrawalFilter, UpdateLidoPriceFilter, log);
+        let exactly_event = ExactlyEvents::UpdateLidoPriceFilter;
+        map_filter!(ElrewardsReceivedFilter, exactly_event, log);
+        map_filter!(ElrewardsVaultSetFilter, exactly_event, log);
+        map_filter!(ElrewardsWithdrawalLimitSetFilter, exactly_event, log);
+        map_filter!(FeeDistributionSetFilter, exactly_event, log);
+        map_filter!(FeeSetFilter, exactly_event, log);
+        map_filter!(RecoverToVaultFilter, exactly_event, log);
+        map_filter!(ScriptResultFilter, exactly_event, log);
+        map_filter!(SharesBurntFilter, exactly_event, log);
+        map_filter!(UnbufferedFilter, exactly_event, log);
+        map_filter!(WithdrawalFilter, exactly_event, log);
 
-        map_filter!(SubmittedFilter, IgnoredFilter, log);
-        map_filter!(TransferSharesFilter, IgnoredFilter, log);
-        map_filter!(ResumedFilter, IgnoredFilter, log);
-        map_filter!(ProtocolContactsSetFilter, IgnoredFilter, log);
-        map_filter!(StakingLimitRemovedFilter, IgnoredFilter, log);
-        map_filter!(StakingLimitSetFilter, IgnoredFilter, log);
-        map_filter!(StakingPausedFilter, IgnoredFilter, log);
-        map_filter!(StakingResumedFilter, IgnoredFilter, log);
-        map_filter!(StoppedFilter, IgnoredFilter, log);
-        map_filter!(WithdrawalCredentialsSetFilter, IgnoredFilter, log);
+        let exactly_event = ExactlyEvents::IgnoredFilter(log.topics.get(0).copied());
+        map_filter!(SubmittedFilter, exactly_event, log);
+        map_filter!(TransferSharesFilter, exactly_event, log);
+        map_filter!(ResumedFilter, exactly_event, log);
+        map_filter!(ProtocolContactsSetFilter, exactly_event, log);
+        map_filter!(StakingLimitRemovedFilter, exactly_event, log);
+        map_filter!(StakingLimitSetFilter, exactly_event, log);
+        map_filter!(StakingPausedFilter, exactly_event, log);
+        map_filter!(StakingResumedFilter, exactly_event, log);
+        map_filter!(StoppedFilter, exactly_event, log);
+        map_filter!(WithdrawalCredentialsSetFilter, exactly_event, log);
 
         let ignored_events: Vec<H256> = [
             "0xe8ec50e5150ae28ae37e493ff389ffab7ffaec2dc4dccfca03f12a3de29d12b2",
@@ -284,7 +282,7 @@ impl EthLogDecode for ExactlyEvents {
             })
             .is_some()
         {
-            return Ok(ExactlyEvents::IgnoredFilter);
+            return Ok(ExactlyEvents::IgnoredFilter(log.topics.get(0).copied()));
         };
 
         println!("Missing event: {:?}", log);
