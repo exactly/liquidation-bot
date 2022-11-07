@@ -1,3 +1,4 @@
+use super::config::Config;
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::protocol::TokenPairFeeMap;
 use ethers::prelude::{
@@ -49,16 +50,19 @@ impl Default for LiquidationAction {
 }
 
 #[derive(Default, Debug)]
-pub struct LiquidationData {
-    pub liquidations: HashMap<Address, (Account, Repay)>,
-    pub eth_price: U256,
+pub struct ProtocolState {
     pub gas_price: U256,
-    pub liquidation_incentive: LiquidationIncentive,
-    pub action: LiquidationAction,
     pub markets: Vec<Address>,
     pub assets: HashMap<Address, Address>,
     pub price_feeds: HashMap<Address, Address>,
     pub price_decimals: U256,
+}
+
+#[derive(Default, Debug)]
+pub struct LiquidationData {
+    pub liquidations: HashMap<Address, (Account, Repay)>,
+    pub action: LiquidationAction,
+    pub state: ProtocolState,
 }
 
 pub struct Liquidation<M, W, S> {
@@ -82,17 +86,14 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         token_pairs: &str,
         previewer: Previewer<SignerMiddleware<M, S>>,
         auditor: Auditor<SignerMiddleware<M, S>>,
-        market_weth_address: Address,
-        weth_address: Address,
-        backup: u32,
-        liquidate_unprofitable: bool,
-        repay_offset: U256,
-        chain_id_name: String,
+        (market_weth_address, weth_address): (Address, Address),
+        config: &Config,
     ) -> Self {
         let (token_pairs, tokens) = parse_token_pairs(token_pairs);
         let token_pairs = Arc::new(token_pairs);
         let tokens = Arc::new(tokens);
-        let liquidator = Self::get_contracts(Arc::clone(&client_relay), chain_id_name);
+        let liquidator =
+            Self::get_contracts(Arc::clone(&client_relay), config.chain_id_name.clone());
         Self {
             client,
             token_pairs,
@@ -102,9 +103,9 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             auditor,
             market_weth_address,
             weth_address,
-            backup,
-            liquidate_unprofitable,
-            repay_offset,
+            backup: config.backup,
+            liquidate_unprofitable: config.liquidate_unprofitable,
+            repay_offset: config.repay_offset,
         }
     }
 
@@ -133,13 +134,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
     ) -> Result<()> {
         let mut liquidations = HashMap::new();
         let mut liquidations_iter = None;
-        let mut eth_price = U256::zero();
-        let mut gas_price = U256::zero();
-        let mut liquidation_incentive = None;
-        let mut markets = Vec::new();
-        let mut price_feeds = HashMap::new();
-        let mut assets = HashMap::new();
-        let mut price_decimals = U256::zero();
+        let mut state = ProtocolState::default();
         let backup = this.lock().await.backup;
         let d = Duration::from_millis(1);
         loop {
@@ -176,13 +171,11 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                         }
                     }
                     liquidations_iter = Some(liquidations.iter());
-                    eth_price = data.eth_price;
-                    gas_price = data.gas_price;
-                    liquidation_incentive = Some(data.liquidation_incentive);
-                    markets = data.markets;
-                    price_feeds = data.price_feeds;
-                    price_decimals = data.price_decimals;
-                    assets = data.assets;
+                    state.gas_price = data.state.gas_price;
+                    state.markets = data.state.markets;
+                    state.price_feeds = data.state.price_feeds;
+                    state.price_decimals = data.state.price_decimals;
+                    state.assets = data.state.assets;
                 }
                 Ok(None) => {}
                 Err(_) => {
@@ -194,21 +187,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                                 if backup > 0 {
                                     println!("backup liquidation - {}", age);
                                 }
-                                let _ = this
-                                    .lock()
-                                    .await
-                                    .liquidate(
-                                        account,
-                                        repay,
-                                        liquidation_incentive.as_ref().unwrap(),
-                                        gas_price,
-                                        eth_price,
-                                        &markets,
-                                        &price_feeds,
-                                        &assets,
-                                        price_decimals,
-                                    )
-                                    .await;
+                                let _ = this.lock().await.liquidate(account, repay, &state).await;
                             } else {
                                 println!("backup - not old enough: {}", age);
                             }
@@ -226,26 +205,11 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         &self,
         account: &Account,
         repay: &Repay,
-        _liquidation_incentive: &LiquidationIncentive,
-        last_gas_price: U256,
-        _eth_price: U256,
-        markets: &[Address],
-        price_feeds: &HashMap<Address, Address>,
-        assets: &HashMap<Address, Address>,
-        price_decimals: U256,
+        state: &ProtocolState,
     ) -> Result<()> {
         println!("Liquidating account {:?}", account);
         if let Some(address) = &repay.market_to_repay {
-            let response = self
-                .is_profitable_async(
-                    account.address,
-                    last_gas_price,
-                    markets,
-                    price_feeds,
-                    assets,
-                    price_decimals,
-                )
-                .await;
+            let response = self.is_profitable_async(account.address, state).await;
 
             let (profitable, max_repay, pool_pair, pair_fee, fee) = match response {
                 Some(response) => response,
@@ -300,11 +264,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
     pub async fn is_profitable_async(
         &self,
         account: Address,
-        last_gas_price: U256,
-        markets: &[Address],
-        price_feeds: &HashMap<Address, Address>,
-        assets: &HashMap<Address, Address>,
-        price_decimals: U256,
+        state: &ProtocolState,
     ) -> Option<(bool, U256, Address, u32, u32)> {
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
@@ -322,11 +282,12 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
                 .unwrap();
-        markets.iter().for_each(|market| {
-            if price_feeds[market] != Address::zero()
-                && price_feeds[market] != Address::from_str(protocol::BASE_FEED).unwrap()
+        state.markets.iter().for_each(|market| {
+            if state.price_feeds[market] != Address::zero()
+                && state.price_feeds[market] != Address::from_str(protocol::BASE_FEED).unwrap()
             {
-                price_multicall.add_call(self.auditor.asset_price(price_feeds[market]), false);
+                price_multicall
+                    .add_call(self.auditor.asset_price(state.price_feeds[market]), false);
             }
         });
         let multicall = multicall.version(MulticallVersion::Multicall);
@@ -350,17 +311,18 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         ) = data;
 
         let mut i = 0;
-        let prices: HashMap<Address, U256> = markets
+        let prices: HashMap<Address, U256> = state
+            .markets
             .iter()
             .map(|market| {
-                if price_feeds[market] != Address::zero()
-                    && price_feeds[market] != Address::from_str(protocol::BASE_FEED).unwrap()
+                if state.price_feeds[market] != Address::zero()
+                    && state.price_feeds[market] != Address::from_str(protocol::BASE_FEED).unwrap()
                 {
                     let price = (*market, prices[i].clone().into_uint().unwrap());
                     i += 1;
                     price
                 } else {
-                    (*market, U256::exp10(price_decimals.as_usize()))
+                    (*market, U256::exp10(state.price_decimals.as_usize()))
                 }
             })
             .collect();
@@ -378,11 +340,11 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let repay = Self::pick_markets(&market_account, &prices, timestamp.into(), assets);
+        let repay = Self::pick_markets(&market_account, &prices, timestamp.into(), &state.assets);
         Self::is_profitable(
             &repay,
             &liquidation_incentive,
-            last_gas_price,
+            state.gas_price,
             prices[&self.market_weth_address],
             &self.token_pairs,
             &self.tokens,
@@ -441,6 +403,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         repay
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn is_profitable(
         repay: &Repay,
         liquidation_incentive: &LiquidationIncentive,
@@ -557,6 +520,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn max_cost(
         repay: &Repay,
         max_repay: U256,

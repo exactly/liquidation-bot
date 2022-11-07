@@ -2,7 +2,7 @@ use super::config::Config;
 use super::exactly_events::ExactlyEvents;
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::liquidation::{Liquidation, LiquidationData, Repay};
-use crate::protocol::liquidation::LiquidationAction;
+use crate::protocol::liquidation::{LiquidationAction, ProtocolState};
 use crate::protocol::{
     Account, AggregatorProxy, Auditor, InterestRateModel, Market, PriceFeed, PriceFeedLido,
 };
@@ -176,12 +176,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             &config.token_pairs,
             previewer.clone(),
             auditor.clone(),
-            market_weth_address,
-            weth_address,
-            config.backup,
-            config.liquidate_unprofitable,
-            config.repay_offset,
-            config.chain_id_name.clone(),
+            (market_weth_address, weth_address),
+            config,
         )));
 
         let liquidation_lock = liquidation.lock().await;
@@ -985,26 +981,26 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             self.liquidation_sender
                 .send(LiquidationData {
                     liquidations,
-                    eth_price: self.markets[&self.market_weth_address].price,
-                    gas_price: *last_gas_price,
-                    liquidation_incentive: self.liquidation_incentive.clone(),
                     action: if user == None {
                         LiquidationAction::Update
                     } else {
                         LiquidationAction::Insert
                     },
-                    markets: self.markets.keys().cloned().collect(),
-                    assets: self
-                        .markets
-                        .iter()
-                        .map(|(address, market)| (*address, market.asset))
-                        .collect(),
-                    price_feeds: self
-                        .markets
-                        .iter()
-                        .map(|(address, market)| (*address, market.price_feed_wrapper))
-                        .collect(),
-                    price_decimals: self.price_decimals,
+                    state: ProtocolState {
+                        gas_price: *last_gas_price,
+                        markets: self.markets.keys().cloned().collect(),
+                        assets: self
+                            .markets
+                            .iter()
+                            .map(|(address, market)| (*address, market.asset))
+                            .collect(),
+                        price_feeds: self
+                            .markets
+                            .iter()
+                            .map(|(address, market)| (*address, market.price_feed_wrapper))
+                            .collect(),
+                        price_decimals: self.price_decimals,
+                    },
                 })
                 .await?;
         }
