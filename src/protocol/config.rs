@@ -34,12 +34,12 @@ impl Default for Config {
             .unwrap();
 
         let comparison_enabled: bool = env::var("COMPARISON_ENABLED")
-            .unwrap_or("parse".into())
+            .unwrap_or_else(|_| "parse".into())
             .parse::<bool>()
             .unwrap_or(false);
 
         let backup = env::var("BACKUP")
-            .unwrap_or("0".into())
+            .unwrap_or_else(|_| "0".into())
             .parse::<u32>()
             .unwrap_or(0);
 
@@ -64,13 +64,16 @@ impl Default for Config {
             }
         };
 
-        let token_pairs = env::var("TOKEN_PAIRS").unwrap_or("".into());
+        let token_pairs = env::var("TOKEN_PAIRS").unwrap_or_else(|_| "".into());
 
-        let repay_offset =
-            utils::parse_units(&env::var("REPAY_OFFSET").unwrap_or("0.001".into()), 18).unwrap();
+        let repay_offset = utils::parse_units(
+            &env::var("REPAY_OFFSET").unwrap_or_else(|_| "0.001".into()),
+            18,
+        )
+        .unwrap();
 
         let liquidate_unprofitable =
-            Arc::new(env::var("LIQUIDATE_UNPROFITABLE").unwrap_or("false".into()))
+            Arc::new(env::var("LIQUIDATE_UNPROFITABLE").unwrap_or_else(|_| "false".into()))
                 .parse::<bool>()
                 .unwrap_or(false);
 
@@ -90,5 +93,5 @@ impl Default for Config {
 }
 
 fn get_env_or_throw(env: &str) -> String {
-    env::var(env).expect(format!("No {}", env).as_str())
+    env::var(env).unwrap_or_else(|_| panic!("No {}", env))
 }

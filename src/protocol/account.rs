@@ -113,22 +113,16 @@ impl Account {
         Self {
             address,
             positions: markets,
-            ..Default::default()
         }
     }
 
     pub fn deposit_at_maturity(&mut self, deposit: &DepositAtMaturityFilter, market: &Address) {
         let data = self.positions.entry(*market).or_default();
-        if data.fixed_deposit_positions.contains_key(&deposit.maturity) {
-            let supply = data
-                .fixed_deposit_positions
-                .get_mut(&deposit.maturity)
-                .unwrap();
-            *supply += deposit.assets + deposit.fee;
-        } else {
-            data.fixed_deposit_positions
-                .insert(deposit.maturity, deposit.assets + deposit.fee);
-        }
+        let supply = data
+            .fixed_deposit_positions
+            .entry(deposit.maturity)
+            .or_default();
+        *supply += deposit.assets + deposit.fee;
     }
 
     pub fn withdraw_at_maturity(&mut self, withdraw: WithdrawAtMaturityFilter, market: &Address) {
@@ -149,16 +143,11 @@ impl Account {
     pub fn borrow_at_maturity(&mut self, borrow: &BorrowAtMaturityFilter, market: &Address) {
         let data = self.positions.entry(*market).or_default();
 
-        if data.fixed_borrow_positions.contains_key(&borrow.maturity) {
-            let borrowed = data
-                .fixed_borrow_positions
-                .get_mut(&borrow.maturity)
-                .unwrap();
-            *borrowed += borrow.assets + borrow.fee;
-        } else {
-            data.fixed_borrow_positions
-                .insert(borrow.maturity, borrow.assets + borrow.fee);
-        }
+        let borrowed = data
+            .fixed_borrow_positions
+            .entry(borrow.maturity)
+            .or_default();
+        *borrowed += borrow.assets + borrow.fee;
     }
 
     pub fn repay_at_maturity(&mut self, repay: &RepayAtMaturityFilter, market: &Address) {

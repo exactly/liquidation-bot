@@ -112,7 +112,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
         for i in latest..=latest + self.max_future_pools as u32 {
             let maturity = U256::from(INTERVAL * i);
             if let Some(fixed_pool) = self.fixed_pools.get(&maturity) {
-                let maturity = U256::from(maturity);
                 if maturity > fixed_pool.last_accrual {
                     smart_pool_earnings += if timestamp < maturity {
                         fixed_pool.unassigned_earnings.mul_div_down(
@@ -139,7 +138,8 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             self.earnings_accumulator.mul_div_down(
                 elapsed,
                 elapsed
-                    + U256::from(self.earnings_accumulator_smooth_factor)
+                    + self
+                        .earnings_accumulator_smooth_factor
                         .mul_wad_down(U256::from(INTERVAL * self.max_future_pools as u32)),
             )
         } else {
@@ -150,7 +150,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
     fn floating_borrow_rate(&self, utilization_before: U256, utilization_after: U256) -> U256 {
         let precision_threshold: U256 = U256::exp10(13) * 75u8; // 7.5e14
 
-        let alpha = U256::from(self.floating_max_utilization) - utilization_before;
+        let alpha = self.floating_max_utilization - utilization_before;
         let delta = utilization_after - utilization_before;
         let r = if delta.div_wad_down(alpha) < precision_threshold {
             I256::from_raw(

@@ -31,10 +31,10 @@ async fn create_client(
         }
     };
     let wallet = config.wallet.clone().with_chain_id(config.chain_id);
-    return (
+    (
         Arc::new(SignerMiddleware::new(provider_ws, wallet.clone())),
         Arc::new(SignerMiddleware::new(provider_https, wallet)),
-    );
+    )
 }
 
 #[tokio::main]

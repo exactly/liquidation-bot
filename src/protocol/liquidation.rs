@@ -1,4 +1,5 @@
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
+use super::protocol::TokenPairFeeMap;
 use ethers::prelude::{
     Address, Middleware, Multicall, MulticallVersion, Signer, SignerMiddleware, U256,
 };
@@ -62,7 +63,7 @@ pub struct LiquidationData {
 
 pub struct Liquidation<M, W, S> {
     pub client: Arc<SignerMiddleware<M, S>>,
-    token_pairs: Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>>,
+    token_pairs: Arc<TokenPairFeeMap>,
     tokens: Arc<HashSet<Address>>,
     liquidator: Liquidator<SignerMiddleware<W, S>>,
     previewer: Previewer<SignerMiddleware<M, S>>,
@@ -122,7 +123,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         Arc::clone(&self.tokens)
     }
 
-    pub fn get_token_pairs(&self) -> Arc<HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>> {
+    pub fn get_token_pairs(&self) -> Arc<TokenPairFeeMap> {
         Arc::clone(&self.token_pairs)
     }
 
@@ -228,7 +229,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         _liquidation_incentive: &LiquidationIncentive,
         last_gas_price: U256,
         _eth_price: U256,
-        markets: &Vec<Address>,
+        markets: &[Address],
         price_feeds: &HashMap<Address, Address>,
         assets: &HashMap<Address, Address>,
         price_decimals: U256,
@@ -300,7 +301,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         &self,
         account: Address,
         last_gas_price: U256,
-        markets: &Vec<Address>,
+        markets: &[Address],
         price_feeds: &HashMap<Address, Address>,
         assets: &HashMap<Address, Address>,
         price_decimals: U256,
@@ -403,8 +404,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                     prices[&market.market],
                     U256::exp10(market.decimals as usize),
                 );
-                let adjusted_collateral =
-                    collateral_value.mul_wad_down(market.adjust_factor.into());
+                let adjusted_collateral = collateral_value.mul_wad_down(market.adjust_factor);
                 repay.total_value_collateral += collateral_value;
                 repay.total_adjusted_collateral += adjusted_collateral;
                 if adjusted_collateral >= repay.market_to_seize_value {
@@ -417,11 +417,9 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             for fixed_position in &market.fixed_borrow_positions {
                 let borrowed = fixed_position.position.principal + fixed_position.position.fee;
                 market_debt_assets += borrowed;
-                if U256::from(fixed_position.maturity) < timestamp {
-                    market_debt_assets += borrowed.mul_wad_down(
-                        (timestamp - U256::from(fixed_position.maturity))
-                            * U256::from(market.penalty_rate),
-                    )
+                if fixed_position.maturity < timestamp {
+                    market_debt_assets += borrowed
+                        .mul_wad_down((timestamp - fixed_position.maturity) * market.penalty_rate)
                 }
             }
             market_debt_assets += market.floating_borrow_assets;
@@ -429,7 +427,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                 prices[&market.market],
                 U256::exp10(market.decimals as usize),
             );
-            let adjusted_debt = market_debt_value.div_wad_up(market.adjust_factor.into());
+            let adjusted_debt = market_debt_value.div_wad_up(market.adjust_factor);
             repay.total_value_debt += market_debt_value;
             repay.total_adjusted_debt += adjusted_debt;
             if adjusted_debt >= repay.market_to_liquidate_debt {
@@ -571,8 +569,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
     ) -> U256 {
         let max_repay = max_repay.mul_div_down(repay.price, U256::exp10(repay.decimals as usize));
         max_repay.mul_wad_down(U256::from(liquidation_incentive.lenders))
-            + max_repay.mul_wad_down(swap_fee * U256::from(U256::exp10(12)))
-            + max_repay.mul_wad_down(swap_pair_fee * U256::from(U256::exp10(12)))
+            + max_repay.mul_wad_down(swap_fee * U256::exp10(12))
+            + max_repay.mul_wad_down(swap_pair_fee * U256::exp10(12))
             + (gas_price * gas_cost).mul_wad_down(eth_price)
     }
 
@@ -589,7 +587,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                     .total_adjusted_debt
                     .mul_wad_up(repay.total_value_collateral),
             );
-        let close_factor = (target_health
+        (target_health
             - repay
                 .total_adjusted_collateral
                 .div_wad_up(repay.total_adjusted_debt))
@@ -602,8 +600,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                         + U256::from(liquidation_incentive.liquidator)
                             .mul_wad_down(liquidation_incentive.lenders.into()),
                 ),
-        );
-        close_factor
+        )
     }
 
     pub fn set_liquidator(
@@ -630,12 +627,7 @@ pub struct TokenPair {
     pub fee: u32,
 }
 
-fn parse_token_pairs(
-    token_pairs: &str,
-) -> (
-    HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
-    HashSet<Address>,
-) {
+fn parse_token_pairs(token_pairs: &str) -> (TokenPairFeeMap, HashSet<Address>) {
     let mut tokens = HashSet::new();
     let json_pairs: Vec<(String, String, u32)> = serde_json::from_str(token_pairs).unwrap();
     let mut pairs = HashMap::new();
@@ -646,7 +638,7 @@ fn parse_token_pairs(
         tokens.insert(token1);
         pairs
             .entry(ordered_addresses(token0, token1))
-            .or_insert(BinaryHeap::new())
+            .or_insert_with(BinaryHeap::new)
             .push(Reverse(fee));
     }
     (pairs, tokens)
@@ -680,8 +672,8 @@ mod services_test {
             pairs
                 .get(
                     &(ordered_addresses(
-                        Address::from_str(&"0x0000000000000000000000000000000000000001").unwrap(),
-                        Address::from_str(&"0x0000000000000000000000000000000000000000").unwrap()
+                        Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
+                        Address::from_str("0x0000000000000000000000000000000000000000").unwrap()
                     ))
                 )
                 .unwrap()

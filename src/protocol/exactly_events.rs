@@ -33,58 +33,58 @@ use aggregator_mod::NewTransmissionFilter;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExactlyEvents {
-    TransferFilter(TransferFilter),
-    DepositFilter(DepositFilter),
-    WithdrawFilter(WithdrawFilter),
-    ApprovalFilter(ApprovalFilter),
-    DepositAtMaturityFilter(DepositAtMaturityFilter),
-    WithdrawAtMaturityFilter(WithdrawAtMaturityFilter),
-    BorrowAtMaturityFilter(BorrowAtMaturityFilter),
-    RepayAtMaturityFilter(RepayAtMaturityFilter),
-    LiquidateFilter(LiquidateFilter),
-    SeizeFilter(SeizeFilter),
-    EarningsAccumulatorSmoothFactorSetFilter(EarningsAccumulatorSmoothFactorSetFilter),
-    MaxFuturePoolsSetFilter(MaxFuturePoolsSetFilter),
-    TreasurySetFilter(TreasurySetFilter),
-    RoleGrantedFilter(RoleGrantedFilter),
-    RoleAdminChangedFilter(RoleAdminChangedFilter),
-    RoleRevokedFilter(RoleRevokedFilter),
-    PausedFilter(PausedFilter),
-    UnpausedFilter(UnpausedFilter),
-    MarketUpdateFilter(MarketUpdateFilter),
-    FixedEarningsUpdateFilter(FixedEarningsUpdateFilter),
-    AccumulatorAccrualFilter(AccumulatorAccrualFilter),
-    FloatingDebtUpdateFilter(FloatingDebtUpdateFilter),
-    BorrowFilter(BorrowFilter),
-    RepayFilter(RepayFilter),
-    BackupFeeRateSetFilter(BackupFeeRateSetFilter),
+    Transfer(TransferFilter),
+    Deposit(DepositFilter),
+    Withdraw(WithdrawFilter),
+    Approval(ApprovalFilter),
+    DepositAtMaturity(DepositAtMaturityFilter),
+    WithdrawAtMaturity(WithdrawAtMaturityFilter),
+    BorrowAtMaturity(BorrowAtMaturityFilter),
+    RepayAtMaturity(RepayAtMaturityFilter),
+    Liquidate(LiquidateFilter),
+    Seize(SeizeFilter),
+    EarningsAccumulatorSmoothFactorSet(EarningsAccumulatorSmoothFactorSetFilter),
+    MaxFuturePoolsSet(MaxFuturePoolsSetFilter),
+    TreasurySet(TreasurySetFilter),
+    RoleGranted(RoleGrantedFilter),
+    RoleAdminChanged(RoleAdminChangedFilter),
+    RoleRevoked(RoleRevokedFilter),
+    Paused(PausedFilter),
+    Unpaused(UnpausedFilter),
+    MarketUpdate(MarketUpdateFilter),
+    FixedEarningsUpdate(FixedEarningsUpdateFilter),
+    AccumulatorAccrual(AccumulatorAccrualFilter),
+    FloatingDebtUpdate(FloatingDebtUpdateFilter),
+    Borrow(BorrowFilter),
+    Repay(RepayFilter),
+    BackupFeeRateSet(BackupFeeRateSetFilter),
 
     // Auditor events
-    MarketListedFilter(MarketListedFilter),
-    MarketEnteredFilter(MarketEnteredFilter),
-    MarketExitedFilter(MarketExitedFilter),
-    LiquidationIncentiveSetFilter(LiquidationIncentiveSetFilter),
-    AdjustFactorSetFilter(AdjustFactorSetFilter),
-    UpgradedFilter(UpgradedFilter),
-    InitializedFilter(InitializedFilter),
-    AdminChangedFilter(AdminChangedFilter),
+    MarketListed(MarketListedFilter),
+    MarketEntered(MarketEnteredFilter),
+    MarketExited(MarketExitedFilter),
+    LiquidationIncentiveSet(LiquidationIncentiveSetFilter),
+    AdjustFactorSet(AdjustFactorSetFilter),
+    Upgraded(UpgradedFilter),
+    Initialized(InitializedFilter),
+    AdminChanged(AdminChangedFilter),
 
     // PoolAccounting events
-    InterestRateModelSetFilter(InterestRateModelSetFilter),
-    PenaltyRateSetFilter(PenaltyRateSetFilter),
-    ReserveFactorSetFilter(ReserveFactorSetFilter),
-    DampSpeedSetFilter(DampSpeedSetFilter),
+    InterestRateModelSet(InterestRateModelSetFilter),
+    PenaltyRateSet(PenaltyRateSetFilter),
+    ReserveFactorSet(ReserveFactorSetFilter),
+    DampSpeedSet(DampSpeedSetFilter),
 
     // ExactlyOracle events
     PriceFeedSetFilter(PriceFeedSetFilter),
     // PriceFeed
-    AnswerUpdatedFilter(AnswerUpdatedFilter),
-    NewRoundFilter(NewRoundFilter),
-    NewTransmissionFilter(NewTransmissionFilter),
+    AnswerUpdated(AnswerUpdatedFilter),
+    NewRound(NewRoundFilter),
+    NewTransmission(NewTransmissionFilter),
 
-    UpdateLidoPriceFilter,
+    UpdateLidoPrice,
 
-    IgnoredFilter(Option<H256>),
+    Ignore(Option<H256>),
 }
 
 macro_rules! map_filter {
@@ -101,121 +101,119 @@ impl EthLogDecode for ExactlyEvents {
         Self: Sized,
     {
         if let Ok(decoded) = RoleGrantedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::RoleGrantedFilter(decoded));
+            return Ok(ExactlyEvents::RoleGranted(decoded));
         }
         if let Ok(decoded) = RoleAdminChangedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::RoleAdminChangedFilter(decoded));
+            return Ok(ExactlyEvents::RoleAdminChanged(decoded));
         }
         if let Ok(decoded) = RoleRevokedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::RoleRevokedFilter(decoded));
+            return Ok(ExactlyEvents::RoleRevoked(decoded));
         }
         if let Ok(decoded) = TransferFilter::decode_log(log) {
-            return Ok(ExactlyEvents::TransferFilter(decoded));
+            return Ok(ExactlyEvents::Transfer(decoded));
         }
         if let Ok(decoded) = DepositFilter::decode_log(log) {
-            return Ok(ExactlyEvents::DepositFilter(decoded));
+            return Ok(ExactlyEvents::Deposit(decoded));
         }
         if let Ok(decoded) = WithdrawFilter::decode_log(log) {
-            return Ok(ExactlyEvents::WithdrawFilter(decoded));
+            return Ok(ExactlyEvents::Withdraw(decoded));
         }
         if let Ok(decoded) = ApprovalFilter::decode_log(log) {
-            return Ok(ExactlyEvents::ApprovalFilter(decoded));
+            return Ok(ExactlyEvents::Approval(decoded));
         }
         if let Ok(decoded) = DepositAtMaturityFilter::decode_log(log) {
-            return Ok(ExactlyEvents::DepositAtMaturityFilter(decoded));
+            return Ok(ExactlyEvents::DepositAtMaturity(decoded));
         }
         if let Ok(decoded) = WithdrawAtMaturityFilter::decode_log(log) {
-            return Ok(ExactlyEvents::WithdrawAtMaturityFilter(decoded));
+            return Ok(ExactlyEvents::WithdrawAtMaturity(decoded));
         }
         if let Ok(decoded) = BorrowAtMaturityFilter::decode_log(log) {
-            return Ok(ExactlyEvents::BorrowAtMaturityFilter(decoded));
+            return Ok(ExactlyEvents::BorrowAtMaturity(decoded));
         }
         if let Ok(decoded) = RepayAtMaturityFilter::decode_log(log) {
-            return Ok(ExactlyEvents::RepayAtMaturityFilter(decoded));
+            return Ok(ExactlyEvents::RepayAtMaturity(decoded));
         }
         if let Ok(decoded) = LiquidateFilter::decode_log(log) {
-            return Ok(ExactlyEvents::LiquidateFilter(decoded));
+            return Ok(ExactlyEvents::Liquidate(decoded));
         }
         if let Ok(decoded) = SeizeFilter::decode_log(log) {
-            return Ok(ExactlyEvents::SeizeFilter(decoded));
+            return Ok(ExactlyEvents::Seize(decoded));
         }
         if let Ok(decoded) = EarningsAccumulatorSmoothFactorSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::EarningsAccumulatorSmoothFactorSetFilter(
-                decoded,
-            ));
+            return Ok(ExactlyEvents::EarningsAccumulatorSmoothFactorSet(decoded));
         }
         if let Ok(decoded) = MaxFuturePoolsSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::MaxFuturePoolsSetFilter(decoded));
+            return Ok(ExactlyEvents::MaxFuturePoolsSet(decoded));
         }
         if let Ok(decoded) = PausedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::PausedFilter(decoded));
+            return Ok(ExactlyEvents::Paused(decoded));
         }
         if let Ok(decoded) = UnpausedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::UnpausedFilter(decoded));
+            return Ok(ExactlyEvents::Unpaused(decoded));
         }
         if let Ok(decoded) = MarketUpdateFilter::decode_log(log) {
-            return Ok(ExactlyEvents::MarketUpdateFilter(decoded));
+            return Ok(ExactlyEvents::MarketUpdate(decoded));
         }
         if let Ok(decoded) = FixedEarningsUpdateFilter::decode_log(log) {
-            return Ok(ExactlyEvents::FixedEarningsUpdateFilter(decoded));
+            return Ok(ExactlyEvents::FixedEarningsUpdate(decoded));
         }
         if let Ok(decoded) = AccumulatorAccrualFilter::decode_log(log) {
-            return Ok(ExactlyEvents::AccumulatorAccrualFilter(decoded));
+            return Ok(ExactlyEvents::AccumulatorAccrual(decoded));
         }
         if let Ok(decoded) = FloatingDebtUpdateFilter::decode_log(log) {
-            return Ok(ExactlyEvents::FloatingDebtUpdateFilter(decoded));
+            return Ok(ExactlyEvents::FloatingDebtUpdate(decoded));
         }
         if let Ok(decoded) = TreasurySetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::TreasurySetFilter(decoded));
+            return Ok(ExactlyEvents::TreasurySet(decoded));
         }
         if let Ok(decoded) = BorrowFilter::decode_log(log) {
-            return Ok(ExactlyEvents::BorrowFilter(decoded));
+            return Ok(ExactlyEvents::Borrow(decoded));
         }
         if let Ok(decoded) = RepayFilter::decode_log(log) {
-            return Ok(ExactlyEvents::RepayFilter(decoded));
+            return Ok(ExactlyEvents::Repay(decoded));
         }
         if let Ok(decoded) = BackupFeeRateSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::BackupFeeRateSetFilter(decoded));
+            return Ok(ExactlyEvents::BackupFeeRateSet(decoded));
         }
 
         // Auditor events
         if let Ok(decoded) = MarketListedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::MarketListedFilter(decoded));
+            return Ok(ExactlyEvents::MarketListed(decoded));
         }
         if let Ok(decoded) = MarketEnteredFilter::decode_log(log) {
-            return Ok(ExactlyEvents::MarketEnteredFilter(decoded));
+            return Ok(ExactlyEvents::MarketEntered(decoded));
         }
         if let Ok(decoded) = MarketExitedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::MarketExitedFilter(decoded));
+            return Ok(ExactlyEvents::MarketExited(decoded));
         }
         if let Ok(decoded) = LiquidationIncentiveSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::LiquidationIncentiveSetFilter(decoded));
+            return Ok(ExactlyEvents::LiquidationIncentiveSet(decoded));
         }
         if let Ok(decoded) = AdjustFactorSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::AdjustFactorSetFilter(decoded));
+            return Ok(ExactlyEvents::AdjustFactorSet(decoded));
         }
         if let Ok(decoded) = AdminChangedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::AdminChangedFilter(decoded));
+            return Ok(ExactlyEvents::AdminChanged(decoded));
         }
         if let Ok(decoded) = UpgradedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::UpgradedFilter(decoded));
+            return Ok(ExactlyEvents::Upgraded(decoded));
         }
         if let Ok(decoded) = InitializedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::InitializedFilter(decoded));
+            return Ok(ExactlyEvents::Initialized(decoded));
         }
 
         // PoolAccounting events
         if let Ok(decoded) = InterestRateModelSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::InterestRateModelSetFilter(decoded));
+            return Ok(ExactlyEvents::InterestRateModelSet(decoded));
         }
         if let Ok(decoded) = PenaltyRateSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::PenaltyRateSetFilter(decoded));
+            return Ok(ExactlyEvents::PenaltyRateSet(decoded));
         }
         if let Ok(decoded) = ReserveFactorSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::ReserveFactorSetFilter(decoded));
+            return Ok(ExactlyEvents::ReserveFactorSet(decoded));
         }
         if let Ok(decoded) = DampSpeedSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::DampSpeedSetFilter(decoded));
+            return Ok(ExactlyEvents::DampSpeedSet(decoded));
         }
 
         // ExactlyOracle events
@@ -225,19 +223,19 @@ impl EthLogDecode for ExactlyEvents {
 
         // PriceFeed
         if let Ok(decoded) = AnswerUpdatedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::AnswerUpdatedFilter(decoded));
+            return Ok(ExactlyEvents::AnswerUpdated(decoded));
         }
 
         if let Ok(decoded) = NewRoundFilter::decode_log(log) {
-            return Ok(ExactlyEvents::NewRoundFilter(decoded));
+            return Ok(ExactlyEvents::NewRound(decoded));
         }
 
         if let Ok(decoded) = NewTransmissionFilter::decode_log(log) {
-            return Ok(ExactlyEvents::NewTransmissionFilter(decoded));
+            return Ok(ExactlyEvents::NewTransmission(decoded));
         }
 
         // Lido events to update price
-        let exactly_event = ExactlyEvents::UpdateLidoPriceFilter;
+        let exactly_event = ExactlyEvents::UpdateLidoPrice;
         map_filter!(ElrewardsReceivedFilter, exactly_event, log);
         map_filter!(ElrewardsVaultSetFilter, exactly_event, log);
         map_filter!(ElrewardsWithdrawalLimitSetFilter, exactly_event, log);
@@ -249,7 +247,7 @@ impl EthLogDecode for ExactlyEvents {
         map_filter!(UnbufferedFilter, exactly_event, log);
         map_filter!(WithdrawalFilter, exactly_event, log);
 
-        let exactly_event = ExactlyEvents::IgnoredFilter(log.topics.get(0).copied());
+        let exactly_event = ExactlyEvents::Ignore(log.topics.get(0).copied());
         map_filter!(SubmittedFilter, exactly_event, log);
         map_filter!(TransferSharesFilter, exactly_event, log);
         map_filter!(ResumedFilter, exactly_event, log);
@@ -271,18 +269,12 @@ impl EthLogDecode for ExactlyEvents {
         .iter()
         .map(|x| H256::from_str(x).unwrap())
         .collect();
-        if log
-            .topics
-            .iter()
-            .find(|topic| {
-                ignored_events
-                    .iter()
-                    .find(|ignored_topic| topic == ignored_topic)
-                    .is_some()
-            })
-            .is_some()
-        {
-            return Ok(ExactlyEvents::IgnoredFilter(log.topics.get(0).copied()));
+        if log.topics.iter().any(|topic| {
+            ignored_events
+                .iter()
+                .any(|ignored_topic| topic == ignored_topic)
+        }) {
+            return Ok(ExactlyEvents::Ignore(log.topics.get(0).copied()));
         };
 
         println!("Missing event: {:?}", log);
