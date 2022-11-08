@@ -5,7 +5,7 @@ use ethers::{
 };
 use std::str::FromStr;
 
-use crate::protocol::{
+use crate::generate_abi::{
     auditor::{
         AdminChangedFilter, InitializedFilter, RoleAdminChangedFilter, RoleGrantedFilter,
         RoleRevokedFilter, UpgradedFilter,
@@ -23,8 +23,8 @@ use crate::protocol::{
     TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
     WithdrawalCredentialsSetFilter, WithdrawalFilter,
 };
-use crate::protocol::{market_protocol::ApprovalFilter, ElrewardsReceivedFilter};
-use crate::protocol::{
+use crate::generate_abi::{market_protocol::ApprovalFilter, ElrewardsReceivedFilter};
+use crate::generate_abi::{
     market_protocol::TransferFilter, ElrewardsVaultSetFilter, ElrewardsWithdrawalLimitSetFilter,
     FeeDistributionSetFilter, FeeSetFilter, RecoverToVaultFilter, ScriptResultFilter,
     SharesBurntFilter, SubmittedFilter, TransferSharesFilter, UnbufferedFilter,

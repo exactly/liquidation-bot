@@ -17,9 +17,10 @@ use tokio::sync::Mutex;
 use tokio::time;
 
 use super::{
-    protocol, Account, Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer,
-    Protocol,
+    protocol::{Protocol, self},
+    Account,
 };
+use crate::generate_abi::{Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer};
 
 #[derive(Default, Debug)]
 pub struct Repay {

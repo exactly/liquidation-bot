@@ -2,10 +2,12 @@ use super::config::Config;
 use super::exactly_events::ExactlyEvents;
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::liquidation::{Liquidation, LiquidationData, Repay};
-use crate::protocol::liquidation::{LiquidationAction, ProtocolState};
-use crate::protocol::{
-    Account, AggregatorProxy, Auditor, InterestRateModel, Market, PriceFeed, PriceFeedLido,
+use crate::generate_abi::{
+    AggregatorProxy, Auditor, InterestRateModel, LiquidationIncentive, MarketAccount, Previewer,
+    PriceFeed, PriceFeedLido, PriceFeedWrapper,
 };
+use crate::liquidation::{LiquidationAction, ProtocolState};
+use crate::{Account, Market};
 use ethers::abi::{Tokenizable, Tokenize};
 use ethers::prelude::builders::ContractCall;
 use ethers::prelude::signer::SignerMiddlewareError;
@@ -28,8 +30,6 @@ use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::Mutex;
 use tokio::time;
 use tokio_stream::StreamExt;
-
-use super::{LiquidationIncentive, MarketAccount, Previewer, PriceFeedWrapper};
 
 #[cfg(feature = "liquidation-stats")]
 use crate::protocol::LiquidateFilter;
@@ -227,8 +227,10 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             .set_liquidator(Arc::clone(&client_relayer), config.chain_id_name.clone());
         for market in self.markets.values_mut() {
             let address = market.contract.address();
-            market.contract =
-                crate::protocol::market_protocol::MarketProtocol::new(address, Arc::clone(&client));
+            market.contract = crate::generate_abi::market_protocol::MarketProtocol::new(
+                address,
+                Arc::clone(&client),
+            );
         }
     }
 

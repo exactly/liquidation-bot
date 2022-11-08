@@ -7,10 +7,23 @@ use ethers::prelude::{Provider, Signer, SignerMiddleware, Wallet, Ws};
 use ethers::providers::Http;
 use eyre::Result;
 
-use crate::protocol::config::Config;
-use crate::protocol::Protocol;
-
+mod account;
+mod config;
+mod exactly_events;
+mod market;
 mod protocol;
+
+mod fixed_point_math;
+mod liquidation;
+
+mod generate_abi;
+
+pub use account::*;
+pub use exactly_events::*;
+pub use market::Market;
+pub use protocol::Protocol;
+
+use crate::config::Config;
 
 async fn create_client(
     config: &Config,

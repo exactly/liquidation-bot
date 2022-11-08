@@ -5,12 +5,14 @@ use std::{
     fmt::{Debug, Formatter},
 };
 
-use super::{
-    fixed_point_math::FixedPointMathGen, BorrowAtMaturityFilter, DepositAtMaturityFilter, Market,
-    RepayAtMaturityFilter, SeizeFilter, WithdrawAtMaturityFilter,
+use crate::{
+    fixed_point_math::{FixedPointMath, FixedPointMathGen},
+    generate_abi::{
+        BorrowAtMaturityFilter, DepositAtMaturityFilter, RepayAtMaturityFilter, SeizeFilter,
+        WithdrawAtMaturityFilter,
+    },
+    Market,
 };
-
-use super::fixed_point_math::FixedPointMath;
 
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct AccountPosition {
