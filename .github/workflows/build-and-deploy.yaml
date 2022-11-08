@@ -11,10 +11,6 @@ on:
         default: liquidation-bot
         required: false
         type: string
-      service:
-        default: liquidation-bot
-        required: false
-        type: string
       location:
         default: us-central1
         required: false
@@ -30,17 +26,14 @@ jobs:
     environment: ${{ inputs.environment }}
     env:
       DOCKER_BUILDKIT: 1
-      IMAGE_TAG: ${{ format('gcr.io/{0}/{1}:{2}', inputs.project_id, inputs.service, github.sha) }}
+      IMAGE_TAG: ${{ format('gcr.io/{0}/liquidation-bot:{1}', inputs.project_id, github.sha) }}
     steps:
       - uses: actions/checkout@v3
-      - uses: webfactory/ssh-agent@v0.7.0
-        with:
-          ssh-private-key: ${{ secrets.ssh_private_key }}
       - uses: actions/setup-node@v3
         with:
           cache: npm
       - run: npm ci --omit=dev --legacy-peer-deps
-      - run: docker build -t ${{ env.IMAGE_TAG }} --ssh default .
+      - run: docker build -t ${{ env.IMAGE_TAG }} .
       - uses: google-github-actions/auth@v0
         with:
           credentials_json: ${{ secrets.service_account_key }}
@@ -54,4 +47,4 @@ jobs:
           cluster_name: ${{ inputs.cluster }}
           project_id: ${{ inputs.project_id }}
           location: ${{ inputs.location }}
-      - run: kubectl set image deployment/${{ inputs.SERVICE }} ${{ inputs.SERVICE }}=${{ env.IMAGE_TAG }}
+      - run: kubectl set image deployment/${{ inputs.environment }} liquidation-bot=${{ env.IMAGE_TAG }}
