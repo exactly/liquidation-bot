@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use tokio::time;
 
 use super::{
-    protocol::{Protocol, self},
+    protocol::{self, Protocol},
     Account,
 };
 use crate::generate_abi::{Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer};
@@ -74,7 +74,6 @@ pub struct Liquidation<M, W, S> {
     previewer: Previewer<SignerMiddleware<M, S>>,
     auditor: Auditor<SignerMiddleware<M, S>>,
     market_weth_address: Address,
-    weth_address: Address,
     backup: u32,
     liquidate_unprofitable: bool,
     repay_offset: U256,
@@ -87,7 +86,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         token_pairs: &str,
         previewer: Previewer<SignerMiddleware<M, S>>,
         auditor: Auditor<SignerMiddleware<M, S>>,
-        (market_weth_address, weth_address): (Address, Address),
+        market_weth_address: Address,
         config: &Config,
     ) -> Self {
         let (token_pairs, tokens) = parse_token_pairs(token_pairs);
@@ -103,7 +102,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             previewer,
             auditor,
             market_weth_address,
-            weth_address,
             backup: config.backup,
             liquidate_unprofitable: config.liquidate_unprofitable,
             repay_offset: config.repay_offset,
@@ -350,7 +348,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             &self.token_pairs,
             &self.tokens,
             self.repay_offset,
-            self.weth_address,
         )
     }
 
@@ -413,13 +410,12 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         token_pairs: &HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
         tokens: &HashSet<Address>,
         repay_offset: U256,
-        swap_route: Address,
     ) -> Option<(bool, U256, Address, u32, u32)> {
         let max_repay = Self::max_repay_assets(repay, liquidation_incentive, U256::MAX)
             .mul_wad_down(math::WAD + U256::exp10(14))
             + repay_offset.mul_div_up(U256::exp10(repay.decimals as usize), repay.price);
         let (pool_pair, pair_fee, fee): (Address, u32, u32) =
-            Self::get_flash_pair(repay, token_pairs, tokens, swap_route);
+            Self::get_flash_pair(repay, token_pairs, tokens);
         let profit = Self::max_profit(repay, max_repay, liquidation_incentive);
         let cost = Self::max_cost(
             repay,
@@ -439,7 +435,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         repay: &Repay,
         token_pairs: &HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
         tokens: &HashSet<Address>,
-        swap_route: Address,
     ) -> (Address, u32, u32) {
         let collateral = repay.collateral_asset_address;
         let repay = repay.repay_asset_address;
@@ -451,15 +446,32 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             if let Some(pair) = token_pairs.get(&ordered_addresses(collateral, repay)) {
                 return (Address::zero(), pair.peek().unwrap().0, 0);
             } else {
+                let (route, _) = token_pairs.iter().fold(
+                    (Address::zero(), u32::MAX),
+                    |(address, lowest_fee), ((token0, token1), pair_fee)| {
+                        let route = if *token0 == repay {
+                            token1
+                        } else if *token1 == repay {
+                            token0
+                        } else {
+                            return (address, lowest_fee);
+                        };
+                        if let Some(fee) = token_pairs.get(&ordered_addresses(collateral, *route)) {
+                            let total_fee = pair_fee.peek().unwrap().0 + fee.peek().unwrap().0;
+                            if total_fee < lowest_fee {
+                                return (*route, total_fee);
+                            }
+                        }
+                        (address, lowest_fee)
+                    },
+                );
                 return match (
-                    token_pairs.get(&ordered_addresses(swap_route, repay)),
-                    token_pairs.get(&ordered_addresses(collateral, swap_route)),
+                    token_pairs.get(&ordered_addresses(route, repay)),
+                    token_pairs.get(&ordered_addresses(collateral, route)),
                 ) {
-                    (Some(pair_fee), Some(fee)) => (
-                        swap_route,
-                        pair_fee.peek().unwrap().0,
-                        fee.peek().unwrap().0,
-                    ),
+                    (Some(pair_fee), Some(fee)) => {
+                        (route, pair_fee.peek().unwrap().0, fee.peek().unwrap().0)
+                    }
 
                     _ => (Address::zero(), 0, 0),
                 };

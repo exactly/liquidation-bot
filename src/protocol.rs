@@ -91,7 +91,6 @@ pub struct Protocol<M, W, S> {
     comparison_enabled: bool,
     liquidation_incentive: LiquidationIncentive,
     market_weth_address: Address,
-    weth_address: Address,
     liquidation: Arc<Mutex<Liquidation<M, W, S>>>,
     liquidation_sender: Sender<LiquidationData>,
     token_pairs: Arc<TokenPairFeeMap>,
@@ -163,11 +162,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             config.chain_id_name
         ));
 
-        let (weth_address, _, _) = Self::parse_abi(&format!(
-            "node_modules/@exactly-protocol/protocol/deployments/{}/WETH.json",
-            config.chain_id_name
-        ));
-
         let (liquidation_sender, liquidation_receiver) = mpsc::channel(1);
 
         let liquidation = Arc::new(Mutex::new(Liquidation::new(
@@ -176,7 +170,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             &config.token_pairs,
             previewer.clone(),
             auditor.clone(),
-            (market_weth_address, weth_address),
+            market_weth_address,
             config,
         )));
 
@@ -202,7 +196,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             comparison_enabled: config.comparison_enabled,
             liquidation_incentive: Default::default(),
             market_weth_address,
-            weth_address,
             liquidation,
             liquidation_sender,
             tokens,
@@ -1028,7 +1021,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     &self.token_pairs,
                     &self.tokens,
                     self.repay_offset,
-                    self.weth_address,
                 ) {
                     if profitable {
                         liquidations.insert(*address, (account.clone(), repay));
