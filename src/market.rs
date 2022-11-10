@@ -16,6 +16,34 @@ abigen!(
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
+#[derive(Clone, Copy, Default, Debug)]
+pub struct PriceRate {
+    pub address: Address,
+    pub conversion_selector: [u8; 4],
+    pub base_unit: U256,
+    pub main_price: U256,
+    pub rate: U256,
+    pub event_emitter: Option<Address>,
+}
+#[derive(Clone, Default, Debug)]
+pub struct PriceFeedController {
+    pub address: Address,
+    pub main_price_feed: Option<Box<PriceFeedController>>,
+    pub event_emitter: Option<Address>,
+    pub wrapper: Option<PriceRate>,
+}
+
+impl PriceFeedController {
+    pub fn main_price_feed(address: Address, event_emitter: Option<Address>) -> Self {
+        Self {
+            address,
+            main_price_feed: None,
+            event_emitter,
+            wrapper: None,
+        }
+    }
+}
+
 #[derive(Eq, PartialEq, Debug, Default)]
 pub struct FixedPool {
     pub borrowed: U256,
@@ -43,7 +71,7 @@ pub struct Market<M, S> {
     pub earnings_accumulator: U256,
     pub last_accumulator_accrual: U256,
     pub earnings_accumulator_smooth_factor: U256,
-    pub price_feed: Address,
+    pub price_feed: Option<PriceFeedController>,
     pub listed: bool,
     pub floating_full_utilization: u128,
     pub floating_a: U256,
@@ -51,11 +79,7 @@ pub struct Market<M, S> {
     pub floating_max_utilization: U256,
     pub treasury_fee_rate: U256,
     pub asset: Address,
-    pub event_emitter: Address,
-    pub wrapper: Address,
-    pub conversion_selector: [u8; 4],
-    pub base_unit: U256,
-    pub price_feed_wrapper: Address,
+    pub base_market: bool,
 }
 
 impl<M: 'static + Middleware, S: 'static + Signer> Eq for Market<M, S> {}
@@ -98,11 +122,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             floating_max_utilization: Default::default(),
             treasury_fee_rate: Default::default(),
             asset: Default::default(),
-            event_emitter: Default::default(),
-            wrapper: Default::default(),
-            conversion_selector: Default::default(),
-            base_unit: Default::default(),
-            price_feed_wrapper: Default::default(),
+            base_market: false,
         }
     }
 

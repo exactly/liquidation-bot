@@ -36,6 +36,12 @@ abigen!(
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
+abigen! {
+    LidoOracle,
+    "lib/abi/LidoOracle.json",
+    event_derives(serde::Deserialize, serde::Serialize)
+}
+
 abigen!(
     PriceFeedLido,
     "lib/abi/Lido.json",

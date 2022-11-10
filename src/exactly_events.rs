@@ -1,10 +1,19 @@
-use ethers::{
-    abi::{Error, RawLog},
-    prelude::EthLogDecode,
-    types::H256,
-};
-use std::str::FromStr;
-
+use crate::generate_abi::lido_oracle::RecoverToVaultFilter;
+use crate::generate_abi::lido_oracle::ScriptResultFilter;
+use crate::generate_abi::market_protocol::ApprovalFilter;
+use crate::generate_abi::market_protocol::TransferFilter;
+use crate::generate_abi::AllowedBeaconBalanceAnnualRelativeIncreaseSetFilter;
+use crate::generate_abi::AllowedBeaconBalanceRelativeDecreaseSetFilter;
+use crate::generate_abi::BeaconReportReceiverSetFilter;
+use crate::generate_abi::BeaconReportedFilter;
+use crate::generate_abi::BeaconSpecSetFilter;
+use crate::generate_abi::CompletedFilter;
+use crate::generate_abi::ContractVersionSetFilter;
+use crate::generate_abi::ExpectedEpochIdUpdatedFilter;
+use crate::generate_abi::MemberAddedFilter;
+use crate::generate_abi::MemberRemovedFilter;
+use crate::generate_abi::PostTotalSharesFilter;
+use crate::generate_abi::QuorumChangedFilter;
 use crate::generate_abi::{
     auditor::{
         AdminChangedFilter, InitializedFilter, RoleAdminChangedFilter, RoleGrantedFilter,
@@ -17,19 +26,16 @@ use crate::generate_abi::{
     FloatingDebtUpdateFilter, InterestRateModelSetFilter, LiquidateFilter,
     LiquidationIncentiveSetFilter, MarketEnteredFilter, MarketExitedFilter, MarketListedFilter,
     MarketUpdateFilter, MaxFuturePoolsSetFilter, PausedFilter, PenaltyRateSetFilter,
-    PriceFeedSetFilter, ProtocolContactsSetFilter, RepayAtMaturityFilter, RepayFilter,
-    ReserveFactorSetFilter, ResumedFilter, SeizeFilter, StakingLimitRemovedFilter,
-    StakingLimitSetFilter, StakingPausedFilter, StakingResumedFilter, StoppedFilter,
+    PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter, ReserveFactorSetFilter, SeizeFilter,
     TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
-    WithdrawalCredentialsSetFilter, WithdrawalFilter,
-};
-use crate::generate_abi::{market_protocol::ApprovalFilter, ElrewardsReceivedFilter};
-use crate::generate_abi::{
-    market_protocol::TransferFilter, ElrewardsVaultSetFilter, ElrewardsWithdrawalLimitSetFilter,
-    FeeDistributionSetFilter, FeeSetFilter, RecoverToVaultFilter, ScriptResultFilter,
-    SharesBurntFilter, SubmittedFilter, TransferSharesFilter, UnbufferedFilter,
 };
 use aggregator_mod::NewTransmissionFilter;
+use ethers::{
+    abi::{Error, RawLog},
+    prelude::EthLogDecode,
+    types::H256,
+};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExactlyEvents {
@@ -81,6 +87,7 @@ pub enum ExactlyEvents {
     AnswerUpdated(AnswerUpdatedFilter),
     NewRound(NewRoundFilter),
     NewTransmission(NewTransmissionFilter),
+    PostTotalShares(PostTotalSharesFilter),
 
     UpdateLidoPrice(Option<H256>),
 
@@ -234,30 +241,33 @@ impl EthLogDecode for ExactlyEvents {
             return Ok(ExactlyEvents::NewTransmission(decoded));
         }
 
-        // Lido events to update price
-        let exactly_event = ExactlyEvents::UpdateLidoPrice(log.topics.get(0).copied());
-        map_filter!(ElrewardsReceivedFilter, exactly_event, log);
-        map_filter!(ElrewardsVaultSetFilter, exactly_event, log);
-        map_filter!(ElrewardsWithdrawalLimitSetFilter, exactly_event, log);
-        map_filter!(FeeDistributionSetFilter, exactly_event, log);
-        map_filter!(FeeSetFilter, exactly_event, log);
-        map_filter!(RecoverToVaultFilter, exactly_event, log);
-        map_filter!(ScriptResultFilter, exactly_event, log);
-        map_filter!(SharesBurntFilter, exactly_event, log);
-        map_filter!(UnbufferedFilter, exactly_event, log);
-        map_filter!(WithdrawalFilter, exactly_event, log);
+        if let Ok(decoded) = PostTotalSharesFilter::decode_log(log) {
+            return Ok(ExactlyEvents::PostTotalShares(decoded));
+        }
 
         let exactly_event = ExactlyEvents::Ignore(log.topics.get(0).copied());
-        map_filter!(SubmittedFilter, exactly_event, log);
-        map_filter!(TransferSharesFilter, exactly_event, log);
-        map_filter!(ResumedFilter, exactly_event, log);
-        map_filter!(ProtocolContactsSetFilter, exactly_event, log);
-        map_filter!(StakingLimitRemovedFilter, exactly_event, log);
-        map_filter!(StakingLimitSetFilter, exactly_event, log);
-        map_filter!(StakingPausedFilter, exactly_event, log);
-        map_filter!(StakingResumedFilter, exactly_event, log);
-        map_filter!(StoppedFilter, exactly_event, log);
-        map_filter!(WithdrawalCredentialsSetFilter, exactly_event, log);
+        map_filter!(
+            AllowedBeaconBalanceAnnualRelativeIncreaseSetFilter,
+            exactly_event,
+            log
+        );
+        map_filter!(
+            AllowedBeaconBalanceRelativeDecreaseSetFilter,
+            exactly_event,
+            log
+        );
+        map_filter!(BeaconReportReceiverSetFilter, exactly_event, log);
+        map_filter!(BeaconReportedFilter, exactly_event, log);
+        map_filter!(BeaconSpecSetFilter, exactly_event, log);
+        map_filter!(CompletedFilter, exactly_event, log);
+        map_filter!(ContractVersionSetFilter, exactly_event, log);
+        map_filter!(ExpectedEpochIdUpdatedFilter, exactly_event, log);
+        map_filter!(MemberAddedFilter, exactly_event, log);
+        map_filter!(MemberRemovedFilter, exactly_event, log);
+        map_filter!(PostTotalSharesFilter, exactly_event, log);
+        map_filter!(QuorumChangedFilter, exactly_event, log);
+        map_filter!(RecoverToVaultFilter, exactly_event, log);
+        map_filter!(ScriptResultFilter, exactly_event, log);
 
         let ignored_events: Vec<H256> = [
             "0xe8ec50e5150ae28ae37e493ff389ffab7ffaec2dc4dccfca03f12a3de29d12b2",

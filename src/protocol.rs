@@ -7,6 +7,7 @@ use crate::generate_abi::{
     PriceFeed, PriceFeedLido, PriceFeedWrapper,
 };
 use crate::liquidation::{LiquidationAction, ProtocolState};
+use crate::market::{PriceFeedController, PriceRate};
 use crate::{Account, Market};
 use ethers::abi::{Tokenizable, Tokenize};
 use ethers::prelude::builders::ContractCall;
@@ -98,7 +99,6 @@ pub struct Protocol<M, W, S> {
     token_pairs: Arc<TokenPairFeeMap>,
     tokens: Arc<HashSet<Address>>,
     price_decimals: U256,
-    ignore_transfers_from: HashSet<Address>,
     repay_offset: U256,
 }
 
@@ -203,7 +203,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             tokens,
             token_pairs,
             price_decimals: U256::zero(),
-            ignore_transfers_from: HashSet::new(),
             repay_offset: config.repay_offset,
         })
     }
@@ -397,83 +396,69 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
     }
 
     async fn update_price_lido(
-        &mut self,
-        wrapper: bool,
-        source: Address,
+        price_feed: &mut PriceFeedController,
+        main_price: U256,
         block: U64,
-    ) -> Result<()> {
-        let markets = self.markets.values_mut().fold(
-            Vec::<&mut Market<M, S>>::new(),
-            |mut markets, market| {
-                if wrapper {
-                    if market.wrapper == source {
-                        markets.push(market);
-                    }
-                } else if market.event_emitter == source && market.wrapper != Address::zero() {
-                    markets.push(market);
-                }
-                markets
-            },
-        );
-        for market in markets {
-            let mut multicall =
-                Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
-            multicall.add_call(
-                PriceFeedWrapper::new(market.price_feed, Arc::clone(&self.client)).latest_answer(),
-                false,
-            );
-            let price_feed = PriceFeedLido::new(market.wrapper, Arc::clone(&self.client));
-            let conversion_selector_method: ContractCall<SignerMiddleware<M, S>, U256> =
-                price_feed.method_hash(market.conversion_selector, market.base_unit)?;
-            multicall.add_call(conversion_selector_method, false);
-            let (main_price, rate): (U256, U256) = multicall
-                .version(MulticallVersion::Multicall)
-                .block(block)
-                .call()
-                .await?;
-            market.price = rate.mul_div_down(main_price, market.base_unit)
-                * U256::exp10(18 - self.price_decimals.as_usize());
-        }
-        Ok(())
+        client: Arc<SignerMiddleware<M, S>>,
+        price_decimals: U256,
+    ) -> Result<U256> {
+        let wrapper = &mut price_feed.wrapper.unwrap();
+        let price_feed_contract = PriceFeedLido::new(wrapper.address, Arc::clone(&client));
+        let conversion_selector_method: ContractCall<SignerMiddleware<M, S>, U256> =
+            price_feed_contract.method_hash(wrapper.conversion_selector, wrapper.base_unit)?;
+        let rate: U256 = conversion_selector_method.block(block).call().await?;
+        wrapper.rate = rate;
+        wrapper.main_price = main_price;
+        Ok(rate.mul_div_down(main_price, wrapper.base_unit)
+            * U256::exp10(18 - price_decimals.as_usize()))
     }
 
     async fn update_prices(&mut self, block: U64) -> Result<()> {
         let price_feed: Vec<PriceFeed<SignerMiddleware<M, S>>> = self
             .markets
             .iter()
-            .filter(|(_, v)| v.listed && v.price_feed != Address::zero())
-            .map(|(_, market)| PriceFeed::new(market.price_feed, self.client.clone()))
+            .filter(|(_, v)| v.listed && v.price_feed.is_some() && !v.base_market)
+            .map(|(_, market)| {
+                PriceFeed::new(
+                    market.price_feed.as_ref().unwrap().address,
+                    self.client.clone(),
+                )
+            })
             .collect();
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
-        let mut updates = 0;
-        price_feed.iter().for_each(|price_feed_wrapper| {
-            if price_feed_wrapper.address() != Address::from_str(BASE_FEED).unwrap() {
-                updates += 1;
-                multicall.add_call(price_feed_wrapper.latest_answer(), false);
-            }
-        });
-        if updates == 0 {
+        if price_feed.is_empty() {
             return Ok(());
         }
-        let result = multicall
+        price_feed.iter().for_each(|price_feed_wrapper| {
+            multicall.add_call(price_feed_wrapper.latest_answer(), false);
+        });
+        let results = multicall
             .version(MulticallVersion::Multicall)
             .block(block)
             .call_raw()
             .await?;
 
-        for (i, market) in self
+        for (market, result) in self
             .markets
             .values_mut()
-            .filter(|m| {
-                m.listed
-                    && m.price_feed != Address::zero()
-                    && m.price_feed != Address::from_str(BASE_FEED).unwrap()
-            })
-            .enumerate()
+            .filter(|m| m.listed && m.price_feed.is_some() && !m.base_market)
+            .zip(results)
         {
-            market.price = result[i].clone().into_int().unwrap()
-                * U256::exp10(18 - self.price_decimals.as_usize());
+            let value = result.clone().into_int().unwrap();
+            let price = if market.price_feed.as_ref().and_then(|p| p.wrapper).is_some() {
+                Self::update_price_lido(
+                    market.price_feed.as_mut().unwrap(),
+                    value,
+                    block,
+                    Arc::clone(&self.client),
+                    self.price_decimals,
+                )
+                .await?
+            } else {
+                value * U256::exp10(18 - self.price_decimals.as_usize())
+            };
+            market.price = price;
         }
 
         Ok(())
@@ -631,11 +616,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
 
             ExactlyEvents::Transfer(data) => {
-                if self.ignore_transfers_from.contains(&meta.address) {
-                    // self.update_price_lido(meta.address, meta.block_number)
-                    //     .await?;
-                    return Ok(LogIterating::NextLog);
-                }
                 if data.to != Address::zero() {
                     self.accounts
                         .entry(data.to)
@@ -755,80 +735,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         .entry(data.market)
                         .or_insert_with_key(|key| Market::new(*key, &self.client));
 
-                    market.price_feed = data.price_feed;
+                    market.price_feed =
+                        Some(PriceFeedController::main_price_feed(data.price_feed, None));
                     market.price = U256::exp10(self.price_decimals.as_usize());
+                    market.base_market = true;
                     return Ok(LogIterating::NextLog);
                 }
-                let wrapper = PriceFeedWrapper::new(data.price_feed, Arc::clone(&self.client));
-                let mut wrapper_multicall =
-                    Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
-                        .await?;
-                wrapper_multicall.add_call(wrapper.main_price_feed(), false);
-                wrapper_multicall.add_call(wrapper.wrapper(), false);
-                wrapper_multicall.add_call(wrapper.conversion_selector(), false);
-                wrapper_multicall.add_call(wrapper.base_unit(), false);
-
-                let (price_feed_address, wrapper) = if let Ok(wrapper_price_feed) =
-                    wrapper_multicall
-                        .version(MulticallVersion::Multicall)
-                        .block(meta.block_number)
-                        .call()
-                        .await
-                {
-                    let (main_price_feed, wrapper, conversion_selector, base_unit): (
-                        Address,
-                        Address,
-                        [u8; 4],
-                        U256,
-                    ) = wrapper_price_feed;
-                    (
-                        main_price_feed,
-                        Some((wrapper, conversion_selector, base_unit)),
-                    )
-                } else {
-                    (data.price_feed, None)
-                };
-
-                let event_emitter = if let Ok(event_emitter) =
-                    AggregatorProxy::new(price_feed_address, Arc::clone(&self.client))
-                        .aggregator()
-                        .block(meta.block_number)
-                        .call()
-                        .await
-                {
-                    event_emitter
-                } else {
-                    price_feed_address
-                };
-                self.contracts_to_listen.insert(
-                    ContractKey {
-                        address: data.market,
-                        kind: ContractKeyKind::PriceFeed,
-                    },
-                    event_emitter,
-                );
-                let market = self
-                    .markets
-                    .entry(data.market)
-                    .or_insert_with_key(|key| Market::new(*key, &self.client));
-
-                market.price_feed = data.price_feed;
-                market.event_emitter = event_emitter;
-                market.price_feed_wrapper = data.price_feed;
-                if let Some((wrapper, conversion_selector, base_unit)) = wrapper {
-                    market.price_feed = price_feed_address;
-                    market.wrapper = wrapper;
-                    market.conversion_selector = conversion_selector;
-                    market.base_unit = base_unit;
-                    self.ignore_transfers_from.insert(wrapper);
-                    self.contracts_to_listen.insert(
-                        ContractKey {
-                            address: wrapper,
-                            kind: ContractKeyKind::PriceFeed,
-                        },
-                        wrapper,
-                    );
-                }
+                self.handle_price_feed(data, &meta).await?;
                 self.update_prices(meta.block_number).await?;
                 self.last_sync = (
                     meta.block_number,
@@ -842,30 +755,28 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
 
             ExactlyEvents::AnswerUpdated(data) => {
-                let markets = self.markets.iter().fold(
-                    Vec::<Address>::new(),
-                    |mut markets, (address, market)| {
-                        if market.event_emitter == meta.address {
-                            markets.push(*address);
+                self.markets.iter_mut().for_each(|(_, market)| {
+                    if let Some(price_feed) = market.price_feed.as_mut().filter(|p| {
+                        if let Some(event_emitter) = p.event_emitter {
+                            event_emitter == meta.address
+                        } else {
+                            false
                         }
-                        markets
-                    },
-                );
-                for market in markets {
-                    let market = self
-                        .markets
-                        .entry(market)
-                        .or_insert_with_key(|key| Market::new(*key, &self.client));
-
-                    let price: U256 = if market.wrapper != Address::zero() {
-                        self.update_price_lido(false, meta.address, meta.block_number)
-                            .await?;
-                        return Ok(LogIterating::NextLog);
-                    } else {
-                        data.current.into_raw() * U256::exp10(18 - self.price_decimals.as_usize())
+                    }) {
+                        let price = if let Some(wrapper) = price_feed.wrapper.as_mut() {
+                            wrapper.main_price = data.current.into_raw();
+                            // * U256::exp10(18 - self.price_decimals.as_usize());
+                            wrapper
+                                .rate
+                                .mul_div_down(wrapper.main_price, wrapper.base_unit)
+                                * U256::exp10(18 - self.price_decimals.as_usize())
+                        } else {
+                            data.current.into_raw()
+                                * U256::exp10(18 - self.price_decimals.as_usize())
+                        };
+                        market.price = price;
                     };
-                    market.price = price;
-                }
+                });
             }
 
             ExactlyEvents::MarketUpdate(data) => {
@@ -919,6 +830,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             ExactlyEvents::LiquidationIncentiveSet(data) => {
                 self.liquidation_incentive = data.liquidation_incentive;
             }
+
             ExactlyEvents::Initialized(_) => {
                 self.price_decimals = self
                     .auditor
@@ -927,10 +839,37 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     .call()
                     .await?;
             }
-            ExactlyEvents::UpdateLidoPrice(_) => {
-                self.update_price_lido(true, meta.address, meta.block_number)
-                    .await?;
+
+            ExactlyEvents::PostTotalShares(data) => {
+                self.markets
+                    .iter_mut()
+                    .filter(|(_, market)| {
+                        if let Some(price_feed) = market.price_feed.as_ref() {
+                            price_feed.wrapper.is_some()
+                        } else {
+                            false
+                        }
+                    })
+                    .for_each(|(_, market)| {
+                        let wrapper = market
+                            .price_feed
+                            .as_mut()
+                            .unwrap()
+                            .wrapper
+                            .as_mut()
+                            .unwrap();
+                        wrapper.rate = if data.total_shares == 0.into() {
+                            U256::zero()
+                        } else {
+                            wrapper.base_unit * data.post_total_pooled_ether / data.total_shares
+                        };
+                        market.price = wrapper
+                            .rate
+                            .mul_div_down(wrapper.main_price, wrapper.base_unit)
+                            * U256::exp10(18 - self.price_decimals.as_usize());
+                    });
             }
+
             _ => {
                 println!("Event not handled - {:?}", event);
             }
@@ -939,6 +878,94 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             .send(TaskActivity::UpdateAll(log.block_number))
             .await?;
         Ok(LogIterating::NextLog)
+    }
+
+    async fn handle_price_feed(
+        &mut self,
+        data: crate::generate_abi::PriceFeedSetFilter,
+        meta: &LogMeta,
+    ) -> Result<(), eyre::ErrReport> {
+        let mut price_feed = PriceFeedController::default();
+        price_feed.address = data.price_feed;
+
+        let wrapper = PriceFeedWrapper::new(data.price_feed, Arc::clone(&self.client));
+        let mut wrapper_multicall =
+            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        wrapper_multicall.add_call(wrapper.main_price_feed(), false);
+        wrapper_multicall.add_call(wrapper.wrapper(), false);
+        wrapper_multicall.add_call(wrapper.conversion_selector(), false);
+        wrapper_multicall.add_call(wrapper.base_unit(), false);
+        let price_feed_address = if let Ok(wrapper_price_feed) = wrapper_multicall
+            .version(MulticallVersion::Multicall)
+            .block(meta.block_number)
+            .call()
+            .await
+        {
+            let (main_price_feed, wrapper, conversion_selector, base_unit): (
+                Address,
+                Address,
+                [u8; 4],
+                U256,
+            ) = wrapper_price_feed;
+            price_feed.main_price_feed = Some(Box::new(PriceFeedController::main_price_feed(
+                main_price_feed,
+                None,
+            )));
+            price_feed.wrapper = Some(PriceRate {
+                address: wrapper,
+                conversion_selector,
+                base_unit,
+                main_price: U256::zero(),
+                rate: U256::zero(),
+                event_emitter: None,
+            });
+            main_price_feed
+        } else {
+            data.price_feed
+        };
+        let event_emitter = if let Ok(event_emitter) =
+            AggregatorProxy::new(price_feed_address, Arc::clone(&self.client))
+                .aggregator()
+                .block(meta.block_number)
+                .call()
+                .await
+        {
+            event_emitter
+        } else {
+            price_feed_address
+        };
+        price_feed.event_emitter = Some(event_emitter);
+        self.contracts_to_listen.insert(
+            ContractKey {
+                address: data.market,
+                kind: ContractKeyKind::PriceFeed,
+            },
+            event_emitter,
+        );
+        let market = self
+            .markets
+            .entry(data.market)
+            .or_insert_with_key(|key| Market::new(*key, &self.client));
+        market.price_feed = Some(price_feed);
+        if let Some(wrapper) = market
+            .price_feed
+            .as_mut()
+            .and_then(|price_feed| price_feed.wrapper)
+            .as_mut()
+        {
+            let lido = PriceFeedLido::new(wrapper.address, Arc::clone(&self.client));
+            let oracle = lido.get_oracle().block(meta.block_number).call().await?;
+            wrapper.event_emitter = Some(oracle);
+            self.contracts_to_listen.insert(
+                ContractKey {
+                    address: wrapper.address,
+                    kind: ContractKeyKind::PriceFeed,
+                },
+                oracle,
+            );
+        };
+
+        Ok(())
     }
 
     async fn check_liquidations(
@@ -994,7 +1021,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             self.liquidation_sender
                 .send(LiquidationData {
                     liquidations,
-                    action: if user == None {
+                    action: if user.is_none() {
                         LiquidationAction::Update
                     } else {
                         LiquidationAction::Insert
@@ -1010,7 +1037,9 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         price_feeds: self
                             .markets
                             .iter()
-                            .map(|(address, market)| (*address, market.price_feed_wrapper))
+                            .map(|(address, market)| {
+                                (*address, market.price_feed.as_ref().unwrap().address)
+                            })
                             .collect(),
                         price_decimals: self.price_decimals,
                     },
@@ -1314,11 +1343,12 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                         .await?;
                 for market in self.markets.values() {
-                    if market.price_feed_wrapper != Address::zero()
-                        && market.price_feed_wrapper != Address::from_str(BASE_FEED).unwrap()
-                    {
-                        multicall
-                            .add_call(self.auditor.asset_price(market.price_feed_wrapper), true);
+                    if market.price_feed.is_some() && !market.base_market {
+                        multicall.add_call(
+                            self.auditor
+                                .asset_price(market.price_feed.as_ref().unwrap().address),
+                            true,
+                        );
                     }
                 }
                 let responses = multicall
@@ -1326,34 +1356,19 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     .block(block)
                     .call_raw()
                     .await?;
-                let mut market_index = 0;
-                for market in self.markets.values() {
-                    if market.price_feed_wrapper != Address::zero()
-                        && market.price_feed_wrapper != Address::from_str(BASE_FEED).unwrap()
-                    {
+                self.markets
+                    .values()
+                    .filter(|market| market.price_feed.is_some() && !market.base_market)
+                    .zip(responses)
+                    .for_each(|(market, response)| {
                         success &= compare!(
                             "price",
                             "",
-                            format!(
-                                "{:#?} - {:#?} - {:#?}",
-                                market.contract.address(),
-                                market.price_feed,
-                                market.event_emitter
-                            ),
-                            responses[market_index].clone().into_uint().unwrap(),
+                            format!("{:#?}/{:#?}", market.contract.address(), market.price_feed),
+                            response.clone().into_uint().unwrap(),
                             market.price
                         );
-                        market_index += 1;
-                    } else {
-                        success &= compare!(
-                            "price",
-                            "",
-                            market.contract.address(),
-                            U256::exp10(self.price_decimals.as_usize()),
-                            market.price
-                        );
-                    }
-                }
+                    });
 
                 let mut multicall =
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
