@@ -19,6 +19,7 @@ use ethers::prelude::{
 use ethers::prelude::{Log, MulticallVersion, PubsubClient};
 use eyre::Result;
 use serde_json::Value;
+use std::backtrace::Backtrace;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::fs::File;
@@ -369,12 +370,18 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                             }
                         }
                         e => {
+                            println!("Error from stream: {:#?}", Backtrace::force_capture());
                             if let Err(SignerMiddlewareError::MiddlewareError(m)) = e {
-                                println!("error to subscribe {:#?}", m);
+                                println!(
+                                    "error to subscribe: {:#?}\ntrying again in few seconds",
+                                    m
+                                );
+                                sleep(Duration::from_secs(2));
                                 continue;
+                            } else if let Err(e) = e {
+                                println!("error to subscribe: {:#?}\nexiting", e);
+                                break 'filter;
                             }
-                            println!("error to subscribe, trying again in few seconds");
-                            sleep(Duration::from_secs(2));
                             break;
                         }
                     }
