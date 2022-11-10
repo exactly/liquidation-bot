@@ -25,6 +25,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::thread::sleep;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::Mutex;
@@ -372,7 +373,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                                 println!("error to subscribe {:#?}", m);
                                 continue;
                             }
-                            println!("error to subscribe");
+                            println!("error to subscribe, trying again in few seconds");
+                            sleep(Duration::from_secs(2));
                             break;
                         }
                     }
