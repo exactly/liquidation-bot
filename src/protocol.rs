@@ -387,11 +387,20 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         Ok(Arc::try_unwrap(service).unwrap().into_inner())
     }
 
-    async fn update_price_lido(&mut self, lido_contract: Address, block: U64) -> Result<()> {
+    async fn update_price_lido(
+        &mut self,
+        wrapper: bool,
+        source: Address,
+        block: U64,
+    ) -> Result<()> {
         let markets = self.markets.values_mut().fold(
             Vec::<&mut Market<M, S>>::new(),
             |mut markets, market| {
-                if market.wrapper == lido_contract {
+                if wrapper {
+                    if market.wrapper == source {
+                        markets.push(market);
+                    }
+                } else if market.event_emitter == source && market.wrapper != Address::zero() {
                     markets.push(market);
                 }
                 markets
@@ -840,7 +849,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         .or_insert_with_key(|key| Market::new(*key, &self.client));
 
                     let price: U256 = if market.wrapper != Address::zero() {
-                        self.update_price_lido(meta.address, meta.block_number)
+                        self.update_price_lido(false, meta.address, meta.block_number)
                             .await?;
                         return Ok(LogIterating::NextLog);
                     } else {
@@ -909,8 +918,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     .call()
                     .await?;
             }
-            ExactlyEvents::UpdateLidoPrice => {
-                self.update_price_lido(meta.address, meta.block_number)
+            ExactlyEvents::UpdateLidoPrice(_) => {
+                self.update_price_lido(true, meta.address, meta.block_number)
                     .await?;
             }
             _ => {

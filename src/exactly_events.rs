@@ -82,7 +82,7 @@ pub enum ExactlyEvents {
     NewRound(NewRoundFilter),
     NewTransmission(NewTransmissionFilter),
 
-    UpdateLidoPrice,
+    UpdateLidoPrice(Option<H256>),
 
     Ignore(Option<H256>),
 }
@@ -235,7 +235,7 @@ impl EthLogDecode for ExactlyEvents {
         }
 
         // Lido events to update price
-        let exactly_event = ExactlyEvents::UpdateLidoPrice;
+        let exactly_event = ExactlyEvents::UpdateLidoPrice(log.topics.get(0).copied());
         map_filter!(ElrewardsReceivedFilter, exactly_event, log);
         map_filter!(ElrewardsVaultSetFilter, exactly_event, log);
         map_filter!(ElrewardsWithdrawalLimitSetFilter, exactly_event, log);
