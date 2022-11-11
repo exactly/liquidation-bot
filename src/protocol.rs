@@ -27,7 +27,6 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::thread::sleep;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::Mutex;
@@ -370,18 +369,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         }
                         e => {
                             println!("Error from stream: {:#?}", Backtrace::force_capture());
+
                             if let Err(SignerMiddlewareError::MiddlewareError(m)) = e {
-                                println!(
-                                    "error to subscribe: {:#?}\ntrying again in few seconds",
-                                    m
-                                );
-                                sleep(Duration::from_secs(2));
-                                continue;
+                                println!("error to subscribe (middleware): {:#?}", m);
                             } else if let Err(e) = e {
-                                println!("error to subscribe: {:#?}\nexiting", e);
-                                break 'filter;
+                                println!("error to subscribe: {:#?}", e);
                             }
-                            break;
+                            break 'filter;
                         }
                     }
                 }
