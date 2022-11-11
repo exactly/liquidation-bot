@@ -61,6 +61,16 @@ async fn main() -> Result<()> {
 
     let config = Config::default();
 
+    let _guard = config.sentry_dsn.clone().map(|sentry_dsn| {
+        sentry::init((
+            sentry_dsn,
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                ..Default::default()
+            },
+        ))
+    });
+
     dbg!(&config);
 
     let mut credit_service: Option<Protocol<Provider<Ws>, Provider<Http>, Wallet<SigningKey>>> =

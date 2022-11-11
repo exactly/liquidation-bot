@@ -19,6 +19,7 @@ pub struct Config {
     pub backup: u32,
     pub liquidate_unprofitable: bool,
     pub repay_offset: U256,
+    pub sentry_dsn: Option<String>,
 }
 
 impl Default for Config {
@@ -77,6 +78,8 @@ impl Default for Config {
                 .parse::<bool>()
                 .unwrap_or(false);
 
+        let sentry_dsn = env::var("SENTRY_DSN").ok();
+
         Config {
             chain_id,
             chain_id_name: chain_id_name.into(),
@@ -88,6 +91,7 @@ impl Default for Config {
             backup,
             liquidate_unprofitable,
             repay_offset,
+            sentry_dsn,
         }
     }
 }
