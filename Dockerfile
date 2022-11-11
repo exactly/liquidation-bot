@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.2
 FROM rust:slim-bullseye AS builder
 
+RUN apt-get update && apt-get -y --no-install-recommends install pkg-config libssl-dev
+
 WORKDIR /liq-bot
 
 COPY node_modules node_modules
