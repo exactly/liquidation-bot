@@ -18,6 +18,7 @@ use ethers::prelude::{
     Address, EthLogDecode, LogMeta, Middleware, Multicall, Signer, SignerMiddleware, U256, U64,
 };
 use ethers::prelude::{Log, MulticallVersion, PubsubClient};
+use ethers::providers::SubscriptionStream;
 use eyre::Result;
 use serde_json::Value;
 use std::backtrace::Backtrace;
@@ -276,6 +277,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 }
             }
         });
+        enum DataFrom<'a, M: Middleware, S: Signer>
+        where
+            <M as Middleware>::Provider: PubsubClient,
+        {
+            Log(Vec<Log>),
+            Stream(Result<SubscriptionStream<'a, M::Provider, Log>, SignerMiddlewareError<M, S>>),
+        }
         let file = File::create("data.log").unwrap();
         let mut writer = BufWriter::new(file);
         let mut first_block = service.lock().await.last_sync.0;
@@ -284,7 +292,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         let mut getting_logs = true;
         'filter: loop {
             let client;
-            let result = {
+            let result: DataFrom<M, S> = {
                 let service_unlocked = service.lock().await;
                 client = Arc::clone(&service_unlocked.client);
                 if latest_block.is_zero() {
@@ -305,17 +313,17 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     filter = filter.to_block(last_block);
                     let result = client.get_logs(&filter).await;
                     if let Ok(logs) = result {
-                        (None, Some(logs))
+                        DataFrom::Log(logs)
                     } else {
                         a.abort();
                         break 'filter;
                     }
                 } else {
-                    (Some(client.subscribe_logs(&filter).await), None)
+                    DataFrom::Stream(client.subscribe_logs(&filter).await)
                 }
             };
             match result {
-                (None, Some(logs)) => {
+                DataFrom::Log(logs) => {
                     _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
                     let mut me = service.lock().await;
                     for log in logs {
@@ -345,7 +353,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         };
                     }
                 }
-                (Some(stream), None) => {
+                DataFrom::Stream(stream) => {
                     _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
                     match stream {
                         Ok(mut stream) => {
@@ -379,7 +387,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         }
                     }
                 }
-                (_, _) => {}
             };
         }
         a.abort();
