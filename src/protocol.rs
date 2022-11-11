@@ -375,15 +375,12 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                                 };
                             }
                         }
-                        e => {
+                        Err(e) => {
                             println!("Error from stream: {:#?}", Backtrace::force_capture());
-
-                            if let Err(SignerMiddlewareError::MiddlewareError(m)) = e {
+                            if let SignerMiddlewareError::MiddlewareError(m) = &e {
                                 println!("error to subscribe (middleware): {:#?}", m);
-                            } else if let Err(e) = e {
-                                println!("error to subscribe: {:#?}", e);
                             }
-                            break 'filter;
+                            panic!("subscribe disconnection: {:#?}", e);
                         }
                     }
                 }
