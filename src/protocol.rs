@@ -3,13 +3,13 @@ use super::exactly_events::ExactlyEvents;
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::liquidation::{Liquidation, LiquidationData, Repay};
 use crate::generate_abi::{
-    AggregatorProxy, Auditor, InterestRateModel, LiquidationIncentive, MarketAccount, Previewer,
-    PriceFeed, PriceFeedLido, PriceFeedWrapper,
+    AggregatorProxy, Auditor, InterestRateModel, LiquidationIncentive, Previewer, PriceFeed,
+    PriceFeedLido, PriceFeedWrapper,
 };
 use crate::liquidation::{LiquidationAction, ProtocolState};
 use crate::market::{PriceFeedController, PriceRate};
 use crate::{Account, Market};
-use ethers::abi::{Tokenizable, Tokenize};
+use ethers::abi::Tokenize;
 use ethers::prelude::builders::ContractCall;
 use ethers::prelude::signer::SignerMiddlewareError;
 use ethers::prelude::{
@@ -33,6 +33,9 @@ use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::Mutex;
 use tokio::time;
 use tokio_stream::StreamExt;
+
+#[cfg(feature = "complete-compare")]
+use crate::generate_abi::MarketAccount;
 
 #[cfg(feature = "liquidation-stats")]
 use crate::protocol::LiquidateFilter;
@@ -972,7 +975,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         last_gas_price: &mut U256,
         user: Option<Address>,
     ) -> Result<()> {
-        println!("check_liquidations");
         let block = self
             .client
             .provider()
@@ -985,7 +987,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         let to_timestamp = block.timestamp;
 
         if self.comparison_enabled {
-            println!("comparison_enabled");
             self.compare_accounts(block_number, to_timestamp).await?;
         }
 
@@ -1011,10 +1012,15 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
         }
         println!(
-            "accounts to check for liquidations {:#?}",
-            self.accounts.len()
+            "accounts checked for liquidations {}. {} {} found",
+            self.accounts.len(),
+            liquidations.len(),
+            if liquidations.len() > 1 {
+                "liquidations"
+            } else {
+                "liquidation"
+            },
         );
-        println!("accounts to liquidate {:#?}", liquidations.len());
         if !liquidations.is_empty() {
             self.liquidation_sender
                 .send(LiquidationData {
@@ -1268,10 +1274,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         Ok(())
     }
 
+    #[cfg(feature = "complete-compare")]
     async fn multicall_previewer(
         &self,
         block: U64,
     ) -> HashMap<Address, HashMap<Address, MarketAccount>> {
+        use ethers::abi::Tokenizable;
+
         let mut skip: usize = 0;
         let batch = 100;
         let mut positions = HashMap::<Address, HashMap<Address, MarketAccount>>::new();
@@ -1316,6 +1325,85 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         positions
     }
 
+    #[cfg(not(feature = "complete-compare"))]
+    async fn compare_accounts(&self, block: U64, timestamp: U256) -> Result<()> {
+        let batch = 100;
+        let mut success = true;
+
+        let mut multicall_pool = Vec::new();
+        for _ in 0..(self.accounts.len() - 1 + batch) / batch {
+            multicall_pool.push(
+                Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?,
+            );
+        }
+        self.accounts
+            .iter()
+            .enumerate()
+            .for_each(|(i, (account, _))| {
+                let new_position = i / batch;
+                multicall_pool[new_position].add_call(
+                    self.auditor
+                        .account_liquidity(*account, Address::zero(), U256::zero()),
+                    false,
+                );
+            });
+
+        if !self.accounts.is_empty() {
+            let mut tasks = Vec::new();
+            for multicall in multicall_pool {
+                tasks.push(tokio::spawn(async move {
+                    multicall
+                        .version(MulticallVersion::Multicall)
+                        .block(block)
+                        .call_raw()
+                        .await
+                }));
+            }
+            let mut responses = Vec::new();
+            for task in tasks {
+                responses.append(&mut task.await.unwrap()?);
+            }
+            for (token, (address, _)) in responses.iter().zip(&self.accounts) {
+                let v = token.clone().into_tokens();
+                let (adjusted_collateral, adjusted_debt): (U256, U256) = (
+                    v[0].clone().into_uint().unwrap(),
+                    v[1].clone().into_uint().unwrap(),
+                );
+                if adjusted_debt > U256::zero() {
+                    let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
+                    if let Some(account) = self.accounts.get(&address) {
+                        let hf = Self::compute_hf(&self.markets, account, timestamp).and_then(
+                            |(hf, collateral, debt, _)| {
+                                success &=
+                                    compare!("health_factor", &account, "", previewer_hf, hf);
+                                success &= compare!(
+                                    "collateral",
+                                    &account,
+                                    "",
+                                    adjusted_collateral,
+                                    collateral
+                                );
+                                success &= compare!("debt", &account, "", adjusted_debt, debt);
+                                Ok(hf)
+                            },
+                        );
+                        println!(
+                            "{:<20?}: {:>20}{}",
+                            address,
+                            hf.as_ref().unwrap_or(&previewer_hf),
+                            if hf.is_err() { "*" } else { "" }
+                        );
+                    }
+                }
+            }
+        }
+        if !success {
+            panic!("compare accounts error");
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "complete-compare")]
     async fn compare_accounts(&self, block: U64, timestamp: U256) -> Result<()> {
         let previewer_accounts = &self.multicall_previewer(U64::from(&block)).await;
         let accounts = &self.accounts;
@@ -1357,7 +1445,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 self.markets
                     .values()
                     .filter(|market| market.price_feed.is_some() && !market.base_market)
-                    .zip(responses)
+                    .zip(&responses)
                     .for_each(|(market, response)| {
                         success &= compare!(
                             "price",
@@ -1583,13 +1671,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 false,
             );
         }
-        let timestamp = self
-            .client
-            .provider()
-            .get_block(block)
-            .await?
-            .unwrap()
-            .timestamp;
 
         let responses = multicall
             .version(MulticallVersion::Multicall)

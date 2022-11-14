@@ -7,6 +7,7 @@ default-run = "liq-bot"
 
 [features]
 liquidation-stats = []
+complete-compare = []
 
 [dependencies]
 dotenv = "0.15"
