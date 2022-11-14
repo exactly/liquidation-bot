@@ -1,6 +1,6 @@
 [package]
 name = "liq-bot"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Rodrigo Bronzelle <bronzelle@gmail.com>", "danilo neves cruz <cruzdanilo@gmail.com>"]
 edition = "2021"
 default-run = "liq-bot"
