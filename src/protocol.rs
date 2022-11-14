@@ -1371,8 +1371,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 );
                 if adjusted_debt > U256::zero() {
                     let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
-                    if let Some(account) = self.accounts.get(&address) {
-                        let hf = Self::compute_hf(&self.markets, account, timestamp).and_then(
+                    if let Some(account) = self.accounts.get(address) {
+                        let hf = Self::compute_hf(&self.markets, account, timestamp).map(
                             |(hf, collateral, debt, _)| {
                                 success &=
                                     compare!("health_factor", &account, "", previewer_hf, hf);
@@ -1384,7 +1384,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                                     collateral
                                 );
                                 success &= compare!("debt", &account, "", adjusted_debt, debt);
-                                Ok(hf)
+                                hf
                             },
                         );
                         println!(
