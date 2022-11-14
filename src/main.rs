@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::panic;
 use std::process;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use ethers::prelude::k256::ecdsa::SigningKey;
@@ -22,16 +23,81 @@ mod generate_abi;
 
 pub use account::*;
 pub use exactly_events::*;
+use log::error;
 use log::info;
-use log::warn;
 pub use market::Market;
 pub use protocol::Protocol;
+pub use protocol::ProtocolError;
 use sentry::integrations::log::SentryLogger;
 use sentry::Breadcrumb;
 use sentry::Level;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 use crate::config::Config;
+
+type ExactlyProtocol = Protocol<Provider<Ws>, Provider<Http>, Wallet<SigningKey>>;
+
+const RETRIES: usize = 10;
+
+enum ConnectFrom {
+    Ws(String),
+    Https(String),
+}
+
+enum ConnectResult {
+    Ws(Provider<Ws>),
+    Https(Provider<Http>),
+}
+
+async fn connect_ws(provider: &str) -> Result<ConnectResult> {
+    let provider = Provider::<Ws>::connect(provider).await?;
+    Ok(ConnectResult::Ws(provider))
+}
+
+async fn connect_https(provider: &str) -> Result<ConnectResult> {
+    let provider = Provider::<Http>::try_from(provider)?;
+    Ok(ConnectResult::Https(provider))
+}
+
+async fn retry_connect(provider: ConnectFrom) -> ConnectResult {
+    let mut counter = 0;
+    loop {
+        let (provider_url, provider_result) = match &provider {
+            ConnectFrom::Ws(provider) => (provider.clone(), connect_ws(provider).await),
+            ConnectFrom::Https(provider) => (provider.clone(), connect_https(provider).await),
+        };
+        match provider_result {
+            Ok(provider) => {
+                break provider;
+            }
+            Err(ref e) => {
+                if counter == RETRIES {
+                    let mut data = BTreeMap::new();
+                    data.insert(
+                        "error message".to_string(),
+                        Value::String(format!("{:?}", e)),
+                    );
+                    data.insert("connecting to".to_string(), Value::String(provider_url));
+                    sentry::add_breadcrumb(Breadcrumb {
+                        ty: "error".to_string(),
+                        category: Some("Trying to connect".to_string()),
+                        level: Level::Error,
+                        data,
+                        ..Default::default()
+                    });
+                    panic!(
+                        "Failed to connect to provider after {} retries\nerror:{:?}",
+                        RETRIES, e
+                    );
+                }
+                counter += 1;
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+}
 
 async fn create_client(
     config: &Config,
@@ -39,17 +105,11 @@ async fn create_client(
     Arc<SignerMiddleware<Provider<Ws>, Wallet<SigningKey>>>,
     Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
 ) {
-    let provider_ws = loop {
-        let provider_result = Provider::<Ws>::connect(config.rpc_provider.clone()).await;
-        if let Ok(provider) = provider_result {
-            break provider;
-        }
+    let ConnectResult::Ws(provider_ws) = retry_connect(ConnectFrom::Ws(config.rpc_provider.clone())).await else {
+        panic!("Failed to connect to provider after {} retries", RETRIES);
     };
-    let provider_https = loop {
-        let provider_result = Provider::<Http>::try_from(config.rpc_provider_relayer.clone());
-        if let Ok(provider) = provider_result {
-            break provider;
-        }
+    let ConnectResult::Https(provider_https) = retry_connect(ConnectFrom::Https(config.rpc_provider_relayer.clone())).await else {
+        panic!("Failed to connect to provider after {} retries", RETRIES);
     };
     let wallet = config.wallet.clone().with_chain_id(config.chain_id);
     (
@@ -113,8 +173,7 @@ async fn main() -> Result<()> {
 
     dbg!(&config);
 
-    let mut credit_service: Option<Protocol<Provider<Ws>, Provider<Http>, Wallet<SigningKey>>> =
-        None;
+    let mut credit_service: Option<Arc<Mutex<ExactlyProtocol>>> = None;
     let mut update_client = false;
     let mut last_client = None;
     loop {
@@ -123,28 +182,59 @@ async fn main() -> Result<()> {
                 if update_client {
                     info!("Updating client");
                     service
+                        .lock()
+                        .await
                         .update_client(Arc::clone(client), Arc::clone(client_relayer), &config)
                         .await;
                     update_client = false;
                 }
             } else {
                 info!("creating service");
-                credit_service = Some(
+                credit_service = Some(Arc::new(Mutex::new(
                     Protocol::new(Arc::clone(client), Arc::clone(client_relayer), &config).await?,
-                );
+                )));
             }
-            if let Some(service) = credit_service {
-                credit_service = match service.launch().await {
-                    Ok(current_service) => {
-                        info!("CREDIT SERVICE ERROR");
-                        Some(current_service)
+            if let Some(service) = &credit_service {
+                match Protocol::launch(Arc::clone(service)).await {
+                    Ok(()) => {
+                        break;
                     }
                     Err(e) => {
-                        warn!("credit service error: {:?}", e);
+                        let mut data = BTreeMap::new();
+                        data.insert(
+                            "Protocol error".to_string(),
+                            Value::String(format!("{:?}", e)),
+                        );
+                        match e {
+                            ProtocolError::SignerMiddlewareError(e) => {
+                                data.insert(
+                                    "Connection error".to_string(),
+                                    Value::String(format!("{:?}", e)),
+                                );
+                                sentry::add_breadcrumb(Breadcrumb {
+                                    ty: "error".to_string(),
+                                    category: Some("Connection".to_string()),
+                                    level: Level::Error,
+                                    data,
+                                    ..Default::default()
+                                });
 
-                        // println!("error: {:?}", e);
-                        update_client = true;
-                        Some(e)
+                                update_client = true;
+                                last_client = None;
+                            }
+                            _ => {
+                                sentry::add_breadcrumb(Breadcrumb {
+                                    ty: "error".to_string(),
+                                    category: Some("General error".to_string()),
+                                    level: Level::Error,
+                                    data,
+                                    ..Default::default()
+                                });
+
+                                error!("ERROR");
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -152,5 +242,5 @@ async fn main() -> Result<()> {
             last_client = Some(create_client(&config).await);
         }
     }
-    // Ok(())
+    Ok(())
 }
