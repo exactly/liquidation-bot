@@ -12,7 +12,7 @@ const INTERVAL: u64 = 4 * 7 * 86_400;
 
 abigen!(
     ERC20,
-    "lib/protocol/deployments/rinkeby/DAI.json",
+    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/DAI.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 

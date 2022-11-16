@@ -6,7 +6,7 @@ use std::{
 };
 
 use super::{
-    AssetSeizedFilter, BorrowAtMaturityFilter, DepositAtMaturityFilter, DepositFilter, FixedLender,
+    SeizeFilter, BorrowAtMaturityFilter, DepositAtMaturityFilter, DepositFilter, FixedLender,
     LiquidateBorrowFilter, RepayAtMaturityFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 
@@ -200,7 +200,7 @@ impl Account {
         // It needs no action since the events emitted by the repay_at_maturity are enough to liquidate the borrow
     }
 
-    pub fn asset_seized(&mut self, _seize: AssetSeizedFilter, _fixed_lender: &Address) {
+    pub fn asset_seized(&mut self, _seize: SeizeFilter, _fixed_lender: &Address) {
         // it needs no action since the events emitted by the repay_at_maturity are enough to seize the borrow's assets
     }
 

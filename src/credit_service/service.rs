@@ -58,12 +58,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         ExactlyOracle<SignerMiddleware<M, S>>,
     ) {
         let (auditor_address, _, deployed_block) = CreditService::<M, S>::parse_abi(&format!(
-            "lib/protocol/deployments/{}/Auditor.json",
+            "node_modules/@exactly-protocol/protocol/deployments/{}/Auditor.json",
             config.chain_id_name
         ));
 
         let (previewer_address, _, _) = CreditService::<M, S>::parse_abi(&format!(
-            "lib/protocol/deployments/{}/Previewer.json",
+            "node_modules/@exactly-protocol/protocol/deployments/{}/Previewer.json",
             config.chain_id_name
         ));
 
@@ -80,7 +80,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
         let (deployed_block, auditor, previewer, oracle) =
             Self::get_contracts(Arc::clone(&client), &config).await;
 
-        let auditor_markets = auditor.get_all_markets().call().await?;
+        let auditor_markets = auditor.all_markets().call().await?;
         let mut markets = HashMap::<Address, FixedLender<M, S>>::new();
         for market in auditor_markets {
             println!("Adding market {:?}", market);
@@ -237,18 +237,18 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     self.markets
                         .entry(meta.address)
                         .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
-                        .max_future_pools = data.new_max_future_pools.as_u32() as u8;
+                        .max_future_pools = data.max_future_pools.as_u32() as u8;
                 }
 
                 ExactlyEvents::OracleSetFilter(data) => {
-                    self.oracle = ExactlyOracle::new(data.new_oracle, self.client.clone());
+                    self.oracle = ExactlyOracle::new(data.oracle, self.client.clone());
                     self.update_prices(meta.block_number).await?;
                     self.contracts_to_listen
                         .entry(ContractKey {
                             address: (*self.auditor).address(),
                             kind: ContractKeyKind::Oracle,
                         })
-                        .or_insert(data.new_oracle);
+                        .or_insert(data.oracle);
                     return Ok((
                         meta.block_number,
                         meta.transaction_index.as_u64() as i128,
@@ -256,18 +256,18 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                     ));
                 }
 
-                ExactlyEvents::AccumulatedEarningsSmoothFactorSetFilter(data) => {
+                ExactlyEvents::EarningsAccumulatorSmoothFactorSetFilter(data) => {
                     self.markets
                         .entry(meta.address)
                         .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
                         .accumulated_earnings_smooth_factor =
-                        data.new_accumulated_earnings_smooth_factor;
+                        data.earnings_accumulator_smooth_factor;
                 }
 
                 ExactlyEvents::MarketListedFilter(data) => {
                     let mut market = self
                         .markets
-                        .entry(data.fixed_lender)
+                        .entry(data.market)
                         .or_insert_with_key(|key| FixedLender::new(*key, &self.client));
                     market.decimals = data.decimals;
                     market.smart_pool_fee_rate = self.sp_fee_rate;
@@ -327,7 +327,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         .or_insert_with(|| Account::new(data.borrower, &self.markets))
                         .liquidate_borrow(data, &meta.address);
                 }
-                ExactlyEvents::AssetSeizedFilter(data) => {
+                ExactlyEvents::SeizeFilter(data) => {
                     self.borrowers
                         .entry(data.borrower)
                         .or_insert_with(|| Account::new(data.borrower, &self.markets))
@@ -336,48 +336,48 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
                 ExactlyEvents::AdjustFactorSetFilter(data) => {
                     self.markets
-                        .entry(data.fixed_lender)
+                        .entry(data.market)
                         .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
-                        .adjust_factor = data.new_adjust_factor;
+                        .adjust_factor = data.adjust_factor;
                 }
 
                 ExactlyEvents::PenaltyRateSetFilter(data) => {
                     self.markets
                         .entry(meta.address)
                         .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
-                        .penalty_rate = data.new_penalty_rate;
+                        .penalty_rate = data.penalty_rate;
                 }
 
                 ExactlyEvents::MarketEnteredFilter(data) => {
                     self.borrowers
                         .entry(data.account)
                         .or_insert_with(|| Account::new(data.account, &self.markets))
-                        .set_collateral(&data.fixed_lender);
+                        .set_collateral(&data.market);
                 }
 
                 ExactlyEvents::MarketExitedFilter(data) => {
                     self.borrowers
                         .entry(data.account)
                         .or_insert_with(|| Account::new(data.account, &self.markets))
-                        .unset_collateral(&data.fixed_lender);
+                        .unset_collateral(&data.market);
                 }
 
-                ExactlyEvents::SpFeeRateSetFilter(data) => {
-                    self.sp_fee_rate = data.sp_fee_rate;
+                ExactlyEvents::BackupFeeRateSetFilter(data) => {
+                    self.sp_fee_rate = data.backup_fee_rate;
                     for market in self.markets.values_mut() {
-                        market.smart_pool_fee_rate = data.sp_fee_rate;
+                        market.smart_pool_fee_rate = data.backup_fee_rate;
                     }
                 }
 
-                ExactlyEvents::AssetSourceSetFilter(data) => {
+                ExactlyEvents::PriceFeedSetFilter(data) => {
                     self.contracts_to_listen
                         .entry(ContractKey {
-                            address: data.fixed_lender,
+                            address: data.market,
                             kind: ContractKeyKind::PriceFeed,
                         })
                         .or_insert_with(|| data.source);
                     self.markets
-                        .entry(data.fixed_lender)
+                        .entry(data.market)
                         .or_insert_with_key(|key| FixedLender::new(*key, &self.client))
                         .price_feed = data.source;
                     self.update_prices(meta.block_number).await?;
@@ -405,17 +405,30 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
                         .markets
                         .entry(meta.address)
                         .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
-                    market.total_shares = data.smart_pool_shares;
-                    market.smart_pool_assets = data.smart_pool_assets;
-                    market.smart_pool_earnings_accumulator = data.smart_pool_earnings_accumulator;
-
-                    if data.maturity != U256::zero() {
-                        let pool = market.fixed_pools.entry(data.maturity).or_default();
-                        pool.last_accrual = data.timestamp;
-                        pool.unassigned_earnings = data.maturity_unassigned_earnings;
-                    } else {
+                    if data.floating_deposit_shares != U256::zero() {
+                        market.total_shares = data.floating_deposit_shares;
+                    }
+                    if data.floating_assets != U256::zero() {
+                        market.smart_pool_assets = data.floating_assets;
+                    }
+                    if data.earnings_accumulator != U256::zero() {
+                        market.smart_pool_earnings_accumulator = data.earnings_accumulator;
                         market.last_accumulated_earnings_accrual = data.timestamp;
                     }
+                }
+
+                ExactlyEvents::MarketUpdatedAtMaturityFilter(data) => {
+                    let market = self
+                        .markets
+                        .entry(meta.address)
+                        .or_insert_with_key(|address| FixedLender::new(*address, &self.client));
+                    market.total_shares = data.floating_deposit_shares;
+                    market.smart_pool_assets = data.floating_assets;
+                    market.smart_pool_earnings_accumulator = data.earnings_accumulator;
+
+                    let pool = market.fixed_pools.entry(data.maturity).or_default();
+                    pool.last_accrual = data.timestamp;
+                    pool.unassigned_earnings = data.maturity_unassigned_earnings;
                 }
 
                 _ => {
@@ -540,7 +553,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
             for borrower in self.borrowers.keys().skip(skip).take(batch) {
                 updated_waiting_data.push(borrower.clone());
 
-                let method = self.previewer.accounts(borrower.clone());
+                let method = self.previewer.exactly(borrower.clone());
                 let method = method.block(block);
                 responses.push(method.call().await.unwrap());
             }
@@ -651,12 +664,12 @@ impl<M: 'static + Middleware, S: 'static + Signer> CreditService<M, S> {
 
                         let market = self.markets.get(&market_address).unwrap();
 
-                        if &previewer_account.smart_pool_assets
+                        if &previewer_account.floating_deposit_assets
                             != &event_account.smart_pool_assets(&market, timestamp)
                         {
                             _fixed_lender_correct = false;
                             println!("  smart_pool_assets:");
-                            println!("    Previewer: {:?}", &previewer_account.smart_pool_assets);
+                            println!("    Previewer: {:?}", &previewer_account.floating_deposit_assets);
                             println!(
                                 "    Event    : {:?}",
                                 &event_account.smart_pool_assets(&market, timestamp)
@@ -679,10 +692,10 @@ total_assets = {:?}",
                             panic!("Debugging");
                         }
 
-                        if previewer_account.smart_pool_shares != event_account.smart_pool_shares {
+                        if previewer_account.floating_deposit_shares != event_account.smart_pool_shares {
                             _fixed_lender_correct = false;
                             println!("  smart_pool_shares:");
-                            println!("    Previewer: {:?}", &previewer_account.smart_pool_shares);
+                            println!("    Previewer: {:?}", &previewer_account.floating_deposit_shares);
                             println!("    Event    : {:?}", &event_account.smart_pool_shares);
                             panic!("Debugging");
                         }
@@ -722,7 +735,7 @@ total_assets = {:?}",
                         }
 
                         let mut _supplies_correct = true;
-                        for position in &previewer_account.maturity_supply_positions {
+                        for position in &previewer_account.fixed_deposit_positions {
                             let total_supply =
                                 event_account.maturity_supply_positions[&position.maturity];
                             let total = position.position.principal + position.position.fee;

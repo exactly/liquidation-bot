@@ -12,36 +12,36 @@ use ethers::prelude::abigen;
 
 abigen!(
     Market,
-    "lib/protocol/deployments/rinkeby/FixedLenderWETH.json",
+    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/MarketWETH.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     Previewer,
-    "lib/protocol/deployments/rinkeby/Previewer.json",
+    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/Previewer.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     ExactlyOracle,
-    "lib/protocol/deployments/rinkeby/ExactlyOracle.json",
+    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/ExactlyOracle.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     Auditor,
-    "lib/protocol/deployments/rinkeby/Auditor.json",
+    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/Auditor.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     InterestRateModel,
-    "lib/protocol/deployments/rinkeby/InterestRateModel.json",
+    "node_modules/@exactly-protocol/protocol/deployments/rinkeby/InterestRateModel.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
 abigen!(
     PriceFeed,
-    "lib/chainlink/contracts/abi/v0.8/AggregatorV2V3Interface.json",
+    "node_modules/@chainlink/contracts/abi/v0.8/AggregatorV2V3Interface.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );

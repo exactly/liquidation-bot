@@ -5,14 +5,14 @@ use ethers::{
 
 use crate::credit_service::{
     auditor_mod::{RoleAdminChangedFilter, RoleGrantedFilter, RoleRevokedFilter},
-    AccumulatedEarningsSmoothFactorSetFilter, AdjustFactorSetFilter, AnswerUpdatedFilter,
-    ApprovalFilter, AssetSeizedFilter, AssetSourceSetFilter, BorrowAtMaturityFilter,
-    CurveParametersSetFilter, DampSpeedSetFilter, DepositAtMaturityFilter, DepositFilter,
+    EarningsAccumulatorSmoothFactorSetFilter, AdjustFactorSetFilter, AnswerUpdatedFilter,
+    ApprovalFilter, SeizeFilter, PriceFeedSetFilter, BorrowAtMaturityFilter,
+    FixedParametersSetFilter, DampSpeedSetFilter, DepositAtMaturityFilter, DepositFilter,
     InterestRateModelSetFilter, LiquidateBorrowFilter, LiquidationIncentiveSetFilter,
-    MarketEnteredFilter, MarketExitedFilter, MarketListedFilter, MarketUpdatedFilter,
+    MarketEnteredFilter, MarketExitedFilter, MarketListedFilter, MarketUpdatedFilter, MarketUpdatedAtMaturityFilter,
     MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter, PenaltyRateSetFilter,
-    RepayAtMaturityFilter, SmartPoolEarningsAccruedFilter, SmartPoolReserveFactorSetFilter,
-    SpFeeRateSetFilter, TransferFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
+    RepayAtMaturityFilter, ReserveFactorSetFilter,
+    BackupFeeRateSetFilter, TransferFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,16 +26,16 @@ pub enum ExactlyEvents {
     BorrowAtMaturityFilter(BorrowAtMaturityFilter),
     RepayAtMaturityFilter(RepayAtMaturityFilter),
     LiquidateBorrowFilter(LiquidateBorrowFilter),
-    AssetSeizedFilter(AssetSeizedFilter),
-    AccumulatedEarningsSmoothFactorSetFilter(AccumulatedEarningsSmoothFactorSetFilter),
+    SeizeFilter(SeizeFilter),
+    EarningsAccumulatorSmoothFactorSetFilter(EarningsAccumulatorSmoothFactorSetFilter),
     MaxFuturePoolsSetFilter(MaxFuturePoolsSetFilter),
-    SmartPoolEarningsAccruedFilter(SmartPoolEarningsAccruedFilter),
     RoleGrantedFilter(RoleGrantedFilter),
     RoleAdminChangedFilter(RoleAdminChangedFilter),
     RoleRevokedFilter(RoleRevokedFilter),
     PausedFilter(PausedFilter),
     UnpausedFilter(UnpausedFilter),
     MarketUpdatedFilter(MarketUpdatedFilter),
+    MarketUpdatedAtMaturityFilter(MarketUpdatedAtMaturityFilter),
 
     // Auditor events
     MarketListedFilter(MarketListedFilter),
@@ -48,15 +48,15 @@ pub enum ExactlyEvents {
     // PoolAccounting events
     InterestRateModelSetFilter(InterestRateModelSetFilter),
     PenaltyRateSetFilter(PenaltyRateSetFilter),
-    SmartPoolReserveFactorSetFilter(SmartPoolReserveFactorSetFilter),
+    ReserveFactorSetFilter(ReserveFactorSetFilter),
     DampSpeedSetFilter(DampSpeedSetFilter),
 
     // InterestRateModel events
-    CurveParametersSetFilter(CurveParametersSetFilter),
-    SpFeeRateSetFilter(SpFeeRateSetFilter),
+    FixedParametersSetFilter(FixedParametersSetFilter),
+    BackupFeeRateSetFilter(BackupFeeRateSetFilter),
 
     // ExactlyOracle events
-    AssetSourceSetFilter(AssetSourceSetFilter),
+    PriceFeedSetFilter(PriceFeedSetFilter),
 
     // PriceFeed
     AnswerUpdatedFilter(AnswerUpdatedFilter),
@@ -103,19 +103,16 @@ impl EthLogDecode for ExactlyEvents {
         if let Ok(decoded) = LiquidateBorrowFilter::decode_log(log) {
             return Ok(ExactlyEvents::LiquidateBorrowFilter(decoded));
         }
-        if let Ok(decoded) = AssetSeizedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::AssetSeizedFilter(decoded));
+        if let Ok(decoded) = SeizeFilter::decode_log(log) {
+            return Ok(ExactlyEvents::SeizeFilter(decoded));
         }
-        if let Ok(decoded) = AccumulatedEarningsSmoothFactorSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::AccumulatedEarningsSmoothFactorSetFilter(
+        if let Ok(decoded) = EarningsAccumulatorSmoothFactorSetFilter::decode_log(log) {
+            return Ok(ExactlyEvents::EarningsAccumulatorSmoothFactorSetFilter(
                 decoded,
             ));
         }
         if let Ok(decoded) = MaxFuturePoolsSetFilter::decode_log(log) {
             return Ok(ExactlyEvents::MaxFuturePoolsSetFilter(decoded));
-        }
-        if let Ok(decoded) = SmartPoolEarningsAccruedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::SmartPoolEarningsAccruedFilter(decoded));
         }
         if let Ok(decoded) = PausedFilter::decode_log(log) {
             return Ok(ExactlyEvents::PausedFilter(decoded));
@@ -125,6 +122,9 @@ impl EthLogDecode for ExactlyEvents {
         }
         if let Ok(decoded) = MarketUpdatedFilter::decode_log(log) {
             return Ok(ExactlyEvents::MarketUpdatedFilter(decoded));
+        }
+        if let Ok(decoded) = MarketUpdatedAtMaturityFilter::decode_log(log) {
+            return Ok(ExactlyEvents::MarketUpdatedAtMaturityFilter(decoded));
         }
 
         // Auditor events
@@ -154,24 +154,24 @@ impl EthLogDecode for ExactlyEvents {
         if let Ok(decoded) = PenaltyRateSetFilter::decode_log(log) {
             return Ok(ExactlyEvents::PenaltyRateSetFilter(decoded));
         }
-        if let Ok(decoded) = SmartPoolReserveFactorSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::SmartPoolReserveFactorSetFilter(decoded));
+        if let Ok(decoded) = ReserveFactorSetFilter::decode_log(log) {
+            return Ok(ExactlyEvents::ReserveFactorSetFilter(decoded));
         }
         if let Ok(decoded) = DampSpeedSetFilter::decode_log(log) {
             return Ok(ExactlyEvents::DampSpeedSetFilter(decoded));
         }
 
         // InterestRateModel events
-        if let Ok(decoded) = CurveParametersSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::CurveParametersSetFilter(decoded));
+        if let Ok(decoded) = FixedParametersSetFilter::decode_log(log) {
+            return Ok(ExactlyEvents::FixedParametersSetFilter(decoded));
         }
-        if let Ok(decoded) = SpFeeRateSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::SpFeeRateSetFilter(decoded));
+        if let Ok(decoded) = BackupFeeRateSetFilter::decode_log(log) {
+            return Ok(ExactlyEvents::BackupFeeRateSetFilter(decoded));
         }
 
         // ExactlyOracle events
-        if let Ok(decoded) = AssetSourceSetFilter::decode_log(log) {
-            return Ok(ExactlyEvents::AssetSourceSetFilter(decoded));
+        if let Ok(decoded) = PriceFeedSetFilter::decode_log(log) {
+            return Ok(ExactlyEvents::PriceFeedSetFilter(decoded));
         }
 
         // PriceFeed
