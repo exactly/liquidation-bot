@@ -8,7 +8,7 @@ use eyre::Result;
 
 use super::Market;
 
-const INTERVAL: u64 = 4 * 7 * 86_400;
+const INTERVAL: u32 = 4 * 7 * 86_400;
 
 abigen!(
     ERC20,
@@ -33,7 +33,7 @@ pub struct FixedLender<M, S> {
     pub smart_pool_assets: U256,
     pub total_shares: U256,
     pub max_future_pools: u8,
-    pub fixed_pools: HashMap<U256, FixedPool>,
+    pub fixed_pools: HashMap<u32, FixedPool>,
     pub smart_pool_fee_rate: U256,
     pub smart_pool_earnings_accumulator: U256,
     pub last_accumulated_earnings_accrual: U256,
@@ -92,15 +92,15 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
     }
 
     pub fn total_assets(&self, timestamp: U256) -> U256 {
-        let latest = ((timestamp - (timestamp % INTERVAL)) / INTERVAL).as_u64();
+        let latest = ((timestamp - (timestamp % INTERVAL)) / INTERVAL).as_u32();
         let mut smart_pool_earnings = U256::zero();
-        for i in latest..=latest + self.max_future_pools as u64 {
-            let maturity = U256::from(i) * INTERVAL;
+        for i in latest..=latest + self.max_future_pools as u32 {
+            let maturity = i * INTERVAL;
             if let Some(fixed_pool) = self.fixed_pools.get(&maturity) {
-                if maturity > fixed_pool.last_accrual {
+                if U256::from(maturity) > fixed_pool.last_accrual {
                     smart_pool_earnings += fixed_pool.unassigned_earnings
                         * (timestamp - fixed_pool.last_accrual)
-                        / (maturity - fixed_pool.last_accrual);
+                        / (U256::from(maturity) - fixed_pool.last_accrual);
                 }
             }
         }
@@ -116,7 +116,7 @@ impl<M: 'static + Middleware, S: 'static + Signer> FixedLender<M, S> {
             self.smart_pool_earnings_accumulator * elapsed
                 / (elapsed
                     + (U256::from(self.accumulated_earnings_smooth_factor)
-                        * (INTERVAL * self.max_future_pools as u64)
+                        * (INTERVAL * self.max_future_pools as u32)
                         / U256::exp10(18)))
         } else {
             U256::zero()

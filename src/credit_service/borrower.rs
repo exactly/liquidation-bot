@@ -6,14 +6,14 @@ use std::{
 };
 
 use super::{
-    SeizeFilter, BorrowAtMaturityFilter, DepositAtMaturityFilter, DepositFilter, FixedLender,
-    LiquidateBorrowFilter, RepayAtMaturityFilter, WithdrawAtMaturityFilter, WithdrawFilter,
+    BorrowAtMaturityFilter, DepositAtMaturityFilter, DepositFilter, FixedLender, LiquidateFilter,
+    RepayAtMaturityFilter, SeizeFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct AccountPosition {
-    pub maturity_supply_positions: HashMap<U256, U256>,
-    pub maturity_borrow_positions: HashMap<U256, U256>,
+    pub maturity_supply_positions: HashMap<u32, U256>,
+    pub maturity_borrow_positions: HashMap<u32, U256>,
     pub smart_pool_shares: U256,
     pub is_collateral: bool,
 }
@@ -197,7 +197,7 @@ impl Account {
         }
     }
 
-    pub fn liquidate_borrow(&mut self, _liquidate: LiquidateBorrowFilter, _fixed_lender: &Address) {
+    pub fn liquidate_borrow(&mut self, _liquidate: LiquidateFilter, _fixed_lender: &Address) {
         // It needs no action since the events emitted by the repay_at_maturity are enough to liquidate the borrow
     }
 

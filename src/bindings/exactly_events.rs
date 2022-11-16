@@ -4,15 +4,19 @@ use ethers::{
 };
 
 use crate::credit_service::{
-    auditor_mod::{RoleAdminChangedFilter, RoleGrantedFilter, RoleRevokedFilter},
-    EarningsAccumulatorSmoothFactorSetFilter, AdjustFactorSetFilter, AnswerUpdatedFilter,
-    ApprovalFilter, SeizeFilter, PriceFeedSetFilter, BorrowAtMaturityFilter,
-    FixedParametersSetFilter, DampSpeedSetFilter, DepositAtMaturityFilter, DepositFilter,
-    InterestRateModelSetFilter, LiquidateBorrowFilter, LiquidationIncentiveSetFilter,
-    MarketEnteredFilter, MarketExitedFilter, MarketListedFilter, MarketUpdatedFilter, MarketUpdatedAtMaturityFilter,
+    auditor_mod::{
+        AdminChangedFilter, InitializedFilter, RoleAdminChangedFilter, RoleGrantedFilter,
+        RoleRevokedFilter, UpgradedFilter,
+    },
+    AccumulatorAccrualFilter, AdjustFactorSetFilter, AnswerUpdatedFilter, ApprovalFilter,
+    BackupFeeRateSetFilter, BorrowAtMaturityFilter, BorrowFilter, DampSpeedSetFilter,
+    DepositAtMaturityFilter, DepositFilter, EarningsAccumulatorSmoothFactorSetFilter,
+    FixedEarningsUpdateFilter, FixedParametersSetFilter, FloatingDebtUpdateFilter,
+    InterestRateModelSetFilter, LiquidateFilter, LiquidationIncentiveSetFilter,
+    MarketEnteredFilter, MarketExitedFilter, MarketListedFilter, MarketUpdateFilter,
     MaxFuturePoolsSetFilter, OracleSetFilter, PausedFilter, PenaltyRateSetFilter,
-    RepayAtMaturityFilter, ReserveFactorSetFilter,
-    BackupFeeRateSetFilter, TransferFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
+    PriceFeedSetFilter, RepayAtMaturityFilter, RepayFilter, ReserveFactorSetFilter, SeizeFilter,
+    TransferFilter, TreasurySetFilter, UnpausedFilter, WithdrawAtMaturityFilter, WithdrawFilter,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,17 +29,22 @@ pub enum ExactlyEvents {
     WithdrawAtMaturityFilter(WithdrawAtMaturityFilter),
     BorrowAtMaturityFilter(BorrowAtMaturityFilter),
     RepayAtMaturityFilter(RepayAtMaturityFilter),
-    LiquidateBorrowFilter(LiquidateBorrowFilter),
+    LiquidateFilter(LiquidateFilter),
     SeizeFilter(SeizeFilter),
     EarningsAccumulatorSmoothFactorSetFilter(EarningsAccumulatorSmoothFactorSetFilter),
     MaxFuturePoolsSetFilter(MaxFuturePoolsSetFilter),
+    TreasurySetFilter(TreasurySetFilter),
     RoleGrantedFilter(RoleGrantedFilter),
     RoleAdminChangedFilter(RoleAdminChangedFilter),
     RoleRevokedFilter(RoleRevokedFilter),
     PausedFilter(PausedFilter),
     UnpausedFilter(UnpausedFilter),
-    MarketUpdatedFilter(MarketUpdatedFilter),
-    MarketUpdatedAtMaturityFilter(MarketUpdatedAtMaturityFilter),
+    MarketUpdateFilter(MarketUpdateFilter),
+    FixedEarningsUpdateFilter(FixedEarningsUpdateFilter),
+    AccumulatorAccrualFilter(AccumulatorAccrualFilter),
+    FloatingDebtUpdateFilter(FloatingDebtUpdateFilter),
+    BorrowFilter(BorrowFilter),
+    RepayFilter(RepayFilter),
 
     // Auditor events
     MarketListedFilter(MarketListedFilter),
@@ -44,6 +53,9 @@ pub enum ExactlyEvents {
     OracleSetFilter(OracleSetFilter),
     LiquidationIncentiveSetFilter(LiquidationIncentiveSetFilter),
     AdjustFactorSetFilter(AdjustFactorSetFilter),
+    UpgradedFilter(UpgradedFilter),
+    InitializedFilter(InitializedFilter),
+    AdminChangedFilter(AdminChangedFilter),
 
     // PoolAccounting events
     InterestRateModelSetFilter(InterestRateModelSetFilter),
@@ -100,8 +112,8 @@ impl EthLogDecode for ExactlyEvents {
         if let Ok(decoded) = RepayAtMaturityFilter::decode_log(log) {
             return Ok(ExactlyEvents::RepayAtMaturityFilter(decoded));
         }
-        if let Ok(decoded) = LiquidateBorrowFilter::decode_log(log) {
-            return Ok(ExactlyEvents::LiquidateBorrowFilter(decoded));
+        if let Ok(decoded) = LiquidateFilter::decode_log(log) {
+            return Ok(ExactlyEvents::LiquidateFilter(decoded));
         }
         if let Ok(decoded) = SeizeFilter::decode_log(log) {
             return Ok(ExactlyEvents::SeizeFilter(decoded));
@@ -120,11 +132,26 @@ impl EthLogDecode for ExactlyEvents {
         if let Ok(decoded) = UnpausedFilter::decode_log(log) {
             return Ok(ExactlyEvents::UnpausedFilter(decoded));
         }
-        if let Ok(decoded) = MarketUpdatedFilter::decode_log(log) {
-            return Ok(ExactlyEvents::MarketUpdatedFilter(decoded));
+        if let Ok(decoded) = MarketUpdateFilter::decode_log(log) {
+            return Ok(ExactlyEvents::MarketUpdateFilter(decoded));
         }
-        if let Ok(decoded) = MarketUpdatedAtMaturityFilter::decode_log(log) {
-            return Ok(ExactlyEvents::MarketUpdatedAtMaturityFilter(decoded));
+        if let Ok(decoded) = FixedEarningsUpdateFilter::decode_log(log) {
+            return Ok(ExactlyEvents::FixedEarningsUpdateFilter(decoded));
+        }
+        if let Ok(decoded) = AccumulatorAccrualFilter::decode_log(log) {
+            return Ok(ExactlyEvents::AccumulatorAccrualFilter(decoded));
+        }
+        if let Ok(decoded) = FloatingDebtUpdateFilter::decode_log(log) {
+            return Ok(ExactlyEvents::FloatingDebtUpdateFilter(decoded));
+        }
+        if let Ok(decoded) = TreasurySetFilter::decode_log(log) {
+            return Ok(ExactlyEvents::TreasurySetFilter(decoded));
+        }
+        if let Ok(decoded) = BorrowFilter::decode_log(log) {
+            return Ok(ExactlyEvents::BorrowFilter(decoded));
+        }
+        if let Ok(decoded) = RepayFilter::decode_log(log) {
+            return Ok(ExactlyEvents::RepayFilter(decoded));
         }
 
         // Auditor events
@@ -145,6 +172,15 @@ impl EthLogDecode for ExactlyEvents {
         }
         if let Ok(decoded) = AdjustFactorSetFilter::decode_log(log) {
             return Ok(ExactlyEvents::AdjustFactorSetFilter(decoded));
+        }
+        if let Ok(decoded) = AdminChangedFilter::decode_log(log) {
+            return Ok(ExactlyEvents::AdminChangedFilter(decoded));
+        }
+        if let Ok(decoded) = UpgradedFilter::decode_log(log) {
+            return Ok(ExactlyEvents::UpgradedFilter(decoded));
+        }
+        if let Ok(decoded) = InitializedFilter::decode_log(log) {
+            return Ok(ExactlyEvents::InitializedFilter(decoded));
         }
 
         // PoolAccounting events
