@@ -160,7 +160,6 @@ impl Account {
     }
 
     pub fn set_collateral(&mut self, market: &Address) {
-        println!("Setting as collateral");
         let data = self.positions.entry(*market).or_default();
         data.is_collateral = true;
     }

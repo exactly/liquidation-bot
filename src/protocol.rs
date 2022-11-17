@@ -19,11 +19,14 @@ use ethers::prelude::{
 };
 use ethers::prelude::{Log, MulticallVersion, PubsubClient};
 use ethers::providers::SubscriptionStream;
+use ethers::types::H256;
 use eyre::Result;
+use log::{error, info, warn};
+use sentry::{add_breadcrumb, Breadcrumb, Level};
 use serde_json::Value;
 use std::backtrace::Backtrace;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::str::FromStr;
@@ -74,9 +77,9 @@ struct ContractKey {
 macro_rules! compare {
     ($label:expr, $account:expr, $market:expr, $ref:expr, $val:expr) => {
         if $ref != $val {
-            println!("{:?}@{}.{}", $account, $market, $label);
-            println!("reference: {:#?}", $ref);
-            println!("    value: {:#?}", $val);
+            warn!("{:?}@{}.{}", $account, $market, $label);
+            warn!("reference: {:#?}", $ref);
+            warn!("    value: {:#?}", $val);
             false
         } else {
             true
@@ -339,7 +342,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                                 }
                             }
                             Err(e) => {
-                                println!("Error {:#?}", e);
+                                error!("Error {:#?}", e);
                                 break 'filter;
                             }
                         };
@@ -372,16 +375,16 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                                         }
                                     }
                                     Err(e) => {
-                                        println!("Error {:#?}", e);
+                                        error!("Error {:#?}", e);
                                         break 'filter;
                                     }
                                 };
                             }
                         }
                         Err(e) => {
-                            println!("Error from stream: {:#?}", Backtrace::force_capture());
+                            error!("Error from stream: {:#?}", Backtrace::force_capture());
                             if let SignerMiddlewareError::MiddlewareError(m) = &e {
-                                println!("error to subscribe (middleware): {:#?}", m);
+                                error!("error to subscribe (middleware): {:#?}", m);
                             }
                             panic!("subscribe disconnection: {:#?}", e);
                         }
@@ -473,12 +476,14 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         _writer: &mut BufWriter<File>,
     ) -> Result<LogIterating> {
         let meta = LogMeta::from(&log);
+        let topics = log.topics.clone();
+        let log_data = log.data.to_vec().clone();
         let result = ExactlyEvents::decode_log(&RawLog {
             topics: log.topics,
             data: log.data.to_vec(),
         });
         if result.is_err() {
-            println!("{:?}", meta);
+            warn!("{:?}", meta);
         }
         let event = result?;
 
@@ -495,7 +500,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             meta.transaction_index.as_u64() as i128,
             meta.log_index.as_u128() as i128,
         );
-        println!("{:?} | {:?}", event, meta);
+        sentry_breadcrumb(&meta, topics, log_data, &event);
         match event {
             ExactlyEvents::MaxFuturePoolsSet(data) => {
                 self.markets
@@ -865,9 +870,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     });
             }
 
-            _ => {
-                println!("Event not handled - {:?}", event);
-            }
+            _ => {}
         }
         sender
             .send(TaskActivity::UpdateAll(log.block_number))
@@ -1005,15 +1008,10 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 );
             }
         }
-        println!(
-            "accounts checked for liquidations {}. {} {} found",
-            self.accounts.len(),
+        info!(
+            "accounts to liquidate {} / {}",
             liquidations.len(),
-            if liquidations.len() > 1 {
-                "liquidations"
-            } else {
-                "liquidation"
-            },
+            self.accounts.len()
         );
         if !liquidations.is_empty() {
             self.liquidation_sender
@@ -1142,7 +1140,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         ) = if let Ok(response) = response {
             response
         } else {
-            println!("error getting data from contracts on current block");
+            error!("error getting data from contracts on current block");
             return Ok(());
         };
         let current_block_data = current_block_data.unwrap();
@@ -1381,7 +1379,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                                 hf
                             },
                         );
-                        println!(
+                        info!(
                             "{:<20?}: {:>20}{}",
                             address,
                             hf.as_ref().unwrap_or(&previewer_hf),
@@ -1409,7 +1407,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             return Ok(());
         };
         for (address, previewer_account) in previewer_accounts {
-            println!("Comparing account {:#?}", address);
+            info!("Comparing account {:#?}", address);
             let account = &accounts[address];
             success &= compare!(
                 "length",
@@ -1678,12 +1676,12 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 v[0].clone().into_uint().unwrap(),
                 v[1].clone().into_uint().unwrap(),
             );
-            println!("account            : {}", account);
-            println!("adjusted collateral: {}", adjusted_collateral);
-            println!("adjusted debt      : {}", adjusted_debt);
+            info!("account            : {}", account);
+            info!("adjusted collateral: {}", adjusted_collateral);
+            info!("adjusted debt      : {}", adjusted_debt);
             if adjusted_debt > U256::zero() {
                 let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
-                println!("health factor      : {}", previewer_hf);
+                info!("health factor      : {}", previewer_hf);
                 if let Some(account) = self.accounts.get(&account) {
                     if let Ok((hf, collateral, debt, _)) =
                         Self::compute_hf(&self.markets, account, timestamp)
@@ -1694,14 +1692,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         success &= compare!("debt", &account, "", adjusted_debt, debt);
                     }
                 }
-            } else {
-                println!(
-                    "Account: {} collateral: {} debt: {}",
-                    &account, adjusted_collateral, adjusted_debt
-                );
-                println!("***************");
-                println!("Account: {:#?}", self.accounts[&account]);
-                println!("***************");
             }
         }
         if !success {
@@ -1819,13 +1809,55 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         } else {
             math::WAD * adjusted_collateral / adjusted_debt
         };
-        if hf < math::WAD && adjusted_debt != U256::zero() {
-            println!("==============");
-            println!("Account                {:?}", account.address);
-            println!("Total Collateral   USD {:?}", total_collateral);
-            println!("Total Debt         USD {:?}", total_debt);
-            println!("Health factor {:?}\n", hf);
-        }
         Ok((hf, adjusted_collateral, adjusted_debt, repay))
     }
+}
+
+fn sentry_breadcrumb(meta: &LogMeta, topics: Vec<H256>, log_data: Vec<u8>, event: &ExactlyEvents) {
+    let mut data = BTreeMap::new();
+    data.insert(
+        "address".to_string(),
+        Value::String(format!("{:X}", meta.address)),
+    );
+    data.insert(
+        "block_number".to_string(),
+        Value::Number(meta.block_number.as_u64().into()),
+    );
+    data.insert(
+        "block_hash".to_string(),
+        Value::String(format!("{:X}", meta.block_hash)),
+    );
+    data.insert(
+        "transaction_hash".to_string(),
+        Value::String(format!("{:X}", meta.transaction_hash)),
+    );
+    data.insert(
+        "transaction_index".to_string(),
+        Value::Number(meta.transaction_index.as_u64().into()),
+    );
+    data.insert(
+        "log_index".to_string(),
+        Value::Number(meta.log_index.as_u64().into()),
+    );
+    data.insert(
+        "topics".to_string(),
+        Value::Array(
+            topics
+                .iter()
+                .map(|t| Value::String(format!("{:X}", t)))
+                .collect(),
+        ),
+    );
+    data.insert(
+        "data".to_string(),
+        Value::String(format!("{:02X?}", log_data)),
+    );
+    let event_name = format!("{:?}", event);
+    add_breadcrumb(Breadcrumb {
+        ty: "info".to_string(),
+        category: Some(event_name[..event_name.find('(').unwrap_or(event_name.len())].to_string()),
+        level: Level::Info,
+        data,
+        ..Default::default()
+    });
 }

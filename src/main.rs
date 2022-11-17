@@ -1,6 +1,7 @@
 use std::panic;
 use std::process;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ethers::prelude::k256::ecdsa::SigningKey;
 use ethers::prelude::{Provider, Signer, SignerMiddleware, Wallet, Ws};
@@ -20,8 +21,11 @@ mod generate_abi;
 
 pub use account::*;
 pub use exactly_events::*;
+use log::error;
+use log::info;
 pub use market::Market;
 pub use protocol::Protocol;
+use sentry::integrations::log::SentryLogger;
 
 use crate::config::Config;
 
@@ -52,10 +56,22 @@ async fn create_client(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("exactly liquidation bot started!");
+    let mut log_builder = pretty_env_logger::formatted_builder();
+    log_builder.parse_filters("warn,info,debug");
+    let logger = SentryLogger::with_dest(log_builder.build());
+
+    log::set_boxed_logger(Box::new(logger)).unwrap();
+    if cfg!(debug_assertions) {
+        log::set_max_level(log::LevelFilter::Info);
+    } else {
+        log::set_max_level(log::LevelFilter::Error);
+    }
 
     panic::set_hook(Box::new(|panic_info| {
-        println!("panic: {:?}", panic_info);
+        error!("panic: {:?}", panic_info);
+        if let Some(client) = sentry::Hub::current().client() {
+            client.close(Some(Duration::from_secs(2)));
+        }
         process::abort();
     }));
 
@@ -66,6 +82,8 @@ async fn main() -> Result<()> {
             sentry_dsn,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
+                debug: true,
+                default_integrations: true,
                 ..Default::default()
             },
         ))
@@ -81,14 +99,14 @@ async fn main() -> Result<()> {
         if let Some((client, client_relayer)) = &last_client {
             if let Some(service) = &mut credit_service {
                 if update_client {
-                    println!("Updating client");
+                    info!("Updating client");
                     service
                         .update_client(Arc::clone(client), Arc::clone(client_relayer), &config)
                         .await;
                     update_client = false;
                 }
             } else {
-                println!("CREATING CREDIT SERVICE");
+                info!("creating service");
                 credit_service = Some(
                     Protocol::new(Arc::clone(client), Arc::clone(client_relayer), &config).await?,
                 );
@@ -100,7 +118,8 @@ async fn main() -> Result<()> {
                         Some(current_service)
                     }
                     Err(e) => {
-                        println!("CREDIT SERVICE ERROR");
+                        error!("credit service error: {:?}", e);
+
                         // println!("error: {:?}", e);
                         update_client = true;
                         Some(e)

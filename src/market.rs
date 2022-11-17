@@ -144,7 +144,6 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
                 }
             }
         }
-        // println!("---------------");
         self.floating_assets
             + smart_pool_earnings
             + self.accumulated_earnings(timestamp)

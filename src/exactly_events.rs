@@ -35,6 +35,7 @@ use ethers::{
     prelude::EthLogDecode,
     types::H256,
 };
+use log::warn;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,7 +289,7 @@ impl EthLogDecode for ExactlyEvents {
             return Ok(ExactlyEvents::Ignore(log.topics.get(0).copied()));
         };
 
-        println!("Missing event: {:?}", log);
+        warn!("Missing event: {:?}", log);
         Err(Error::InvalidData)
     }
 }

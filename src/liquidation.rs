@@ -5,6 +5,7 @@ use ethers::prelude::{
     Address, Middleware, Multicall, MulticallVersion, Signer, SignerMiddleware, U256,
 };
 use eyre::Result;
+use log::info;
 use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -141,7 +142,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                 Ok(Some(data)) => {
                     match data.action {
                         LiquidationAction::Update => {
-                            println!("Updating liquidation data");
+                            info!("Updating liquidation data");
                             liquidations = data
                                 .liquidations
                                 .into_iter()
@@ -179,19 +180,19 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                 Ok(None) => {}
                 Err(_) => {
                     if let Some(liquidation) = &mut liquidations_iter {
-                        println!("Check for next to liquidate");
+                        info!("Check for next to liquidate");
                         if let Some((_, (account, repay, age))) = liquidation.next() {
-                            println!("Found");
+                            info!("Found");
                             if backup == 0 || *age > backup {
                                 if backup > 0 {
-                                    println!("backup liquidation - {}", age);
+                                    info!("backup liquidation - {}", age);
                                 }
                                 let _ = this.lock().await.liquidate(account, repay, &state).await;
                             } else {
-                                println!("backup - not old enough: {}", age);
+                                info!("backup - not old enough: {}", age);
                             }
                         } else {
-                            println!("Not found");
+                            info!("Not found");
                             liquidations_iter = None;
                         }
                     }
@@ -206,7 +207,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
         repay: &Repay,
         state: &ProtocolState,
     ) -> Result<()> {
-        println!("Liquidating account {:?}", account);
+        info!("Liquidating account {:?}", account);
         if let Some(address) = &repay.market_to_repay {
             let response = self.is_profitable_async(account.address, state).await;
 
@@ -216,28 +217,28 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             };
 
             if !profitable && !self.liquidate_unprofitable {
-                println!("not profitable to liquidate");
-                println!(
+                info!("not profitable to liquidate");
+                info!(
                     "repay$: {:?}",
                     max_repay.mul_div_up(repay.price, U256::exp10(repay.decimals as usize))
                 );
                 return Ok(());
             }
 
-            println!("Liquidating on market {:#?}", address);
-            println!("seizing                    {:#?}", repay.market_to_seize);
+            info!("Liquidating on market {:#?}", address);
+            info!("seizing                    {:#?}", repay.market_to_seize);
 
             // liquidate using liquidator contract
-            println!("repay     : {:#?}", *address);
-            println!(
+            info!("repay     : {:#?}", *address);
+            info!(
                 "seize     : {:#?}",
                 repay.market_to_seize.unwrap_or(Address::zero())
             );
-            println!("borrower  : {:#?}", account.address);
-            println!("max_repay : {:#?}", max_repay);
-            println!("pool_pair : {:#?}", pool_pair);
-            println!("pair_fee  : {:#?}", pair_fee);
-            println!("fee       : {:#?}", fee);
+            info!("borrower  : {:#?}", account.address);
+            info!("max_repay : {:#?}", max_repay);
+            info!("pool_pair : {:#?}", pool_pair);
+            info!("pair_fee  : {:#?}", pair_fee);
+            info!("fee       : {:#?}", fee);
 
             let func = self.liquidator.liquidate(
                 *address,
@@ -248,15 +249,15 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
                 pair_fee,
                 fee,
             );
-            println!("func: {:#?}", func);
+            info!("func: {:#?}", func);
             let tx = func.send().await;
-            println!("tx: {:#?}", &tx);
+            info!("tx: {:#?}", &tx);
             let tx = tx?;
-            println!("waiting receipt");
+            info!("waiting receipt");
             let receipt = tx.confirmations(1).await?;
-            println!("Liquidation tx {:?}", receipt);
+            info!("Liquidation tx {:?}", receipt);
         }
-        println!("done liquidating");
+        info!("done liquidating");
         Ok(())
     }
 
@@ -297,9 +298,9 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             response
         } else {
             if let Err(err) = response {
-                println!("error: {:?}", err);
+                info!("error: {:?}", err);
             }
-            println!("error getting multicall data");
+            info!("error getting multicall data");
             return None;
         };
 
@@ -327,12 +328,12 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liqu
             .collect();
 
         if adjusted_debt.is_zero() {
-            println!("no debt");
+            info!("no debt");
             return None;
         }
         let hf = adjusted_collateral.div_wad_down(adjusted_debt);
         if hf > math::WAD {
-            println!("healthy");
+            info!("healthy");
             return None;
         }
         let timestamp = SystemTime::now()
