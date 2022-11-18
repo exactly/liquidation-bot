@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.2
 FROM rust:slim-bullseye AS builder
 
-RUN apt-get update && apt-get -y --no-install-recommends install pkg-config libssl-dev
+RUN apt-get update && apt-get install --no-install-recommends -y pkg-config libssl-dev
 
 WORKDIR /liq-bot
 
@@ -15,6 +15,10 @@ COPY lib lib
 RUN cargo build --release
 
 FROM debian:stable-slim
+
+RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /liq-bot
 
