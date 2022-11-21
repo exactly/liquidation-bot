@@ -62,9 +62,9 @@ async fn main() -> Result<()> {
 
     log::set_boxed_logger(Box::new(logger)).unwrap();
     if cfg!(debug_assertions) {
-        log::set_max_level(log::LevelFilter::Info);
+        log::set_max_level(log::LevelFilter::Debug);
     } else {
-        log::set_max_level(log::LevelFilter::Error);
+        log::set_max_level(log::LevelFilter::Info);
     }
 
     panic::set_hook(Box::new(|panic_info| {
@@ -83,6 +83,7 @@ async fn main() -> Result<()> {
             sentry::ClientOptions {
                 release: sentry::release_name!(),
                 debug: true,
+                attach_stacktrace: true,
                 default_integrations: true,
                 ..Default::default()
             },
