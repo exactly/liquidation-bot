@@ -22,11 +22,7 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
 
   mapping(address => bool) public callers;
 
-  constructor(
-    address owner_,
-    address factory_,
-    ISwapRouter swapRouter_
-  ) Auth(owner_, this) {
+  constructor(address owner_, address factory_, ISwapRouter swapRouter_) Auth(owner_, this) {
     factory = factory_;
     swapRouter = swapRouter_;
   }
@@ -107,11 +103,8 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     }
   }
 
-  function uniswapV3SwapCallback(
-    int256 amount0Delta,
-    int256 amount1Delta,
-    bytes calldata data
-  ) external {
+  // slither-disable-next-line similar-names
+  function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
     SwapCallbackData memory s = abi.decode(data, (SwapCallbackData));
     ERC20 seizeAsset = s.seizeMarket.asset();
     if (s.borrower != address(0)) {
@@ -162,11 +155,7 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     }
   }
 
-  function uniswapV3FlashCallback(
-    uint256 fee0,
-    uint256 fee1,
-    bytes calldata data
-  ) external {
+  function uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes calldata data) external {
     FlashCallbackData memory f = abi.decode(data, (FlashCallbackData));
     ERC20 repayAsset = f.repayMarket.asset();
     PoolAddress.PoolKey memory poolKey = PoolAddress.getPoolKey(address(repayAsset), f.poolPair, f.fee);
@@ -201,19 +190,11 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     );
   }
 
-  function transfer(
-    ERC20 asset,
-    address to,
-    uint256 amount
-  ) external requiresAuth {
+  function transfer(ERC20 asset, address to, uint256 amount) external requiresAuth {
     asset.safeTransfer(to, amount);
   }
 
-  function canCall(
-    address caller,
-    address,
-    bytes4 functionSig
-  ) external view returns (bool) {
+  function canCall(address caller, address, bytes4 functionSig) external view returns (bool) {
     return functionSig == this.liquidate.selector && callers[caller];
   }
 
@@ -248,11 +229,7 @@ struct FlashCallbackData {
 interface IMarket {
   function asset() external view returns (ERC20);
 
-  function liquidate(
-    address borrower,
-    uint256 maxAssets,
-    IMarket seizeMarket
-  ) external returns (uint256 repaidAssets);
+  function liquidate(address borrower, uint256 maxAssets, IMarket seizeMarket) external returns (uint256 repaidAssets);
 }
 
 // https://github.com/Uniswap/v3-periphery/pull/289
@@ -265,11 +242,7 @@ library PoolAddress {
     uint24 fee;
   }
 
-  function getPoolKey(
-    address tokenA,
-    address tokenB,
-    uint24 fee
-  ) internal pure returns (PoolKey memory) {
+  function getPoolKey(address tokenA, address tokenB, uint24 fee) internal pure returns (PoolKey memory) {
     if (tokenA > tokenB) (tokenA, tokenB) = (tokenB, tokenA);
     return PoolKey({ token0: tokenA, token1: tokenB, fee: fee });
   }
