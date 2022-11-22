@@ -1594,7 +1594,7 @@ impl<
                             },
                         );
                         info!(
-                            "{:<20?}: {:>20}{}",
+                            "{:<20?}: {:>24}{}",
                             address,
                             hf.as_ref().unwrap_or(&previewer_hf),
                             if hf.is_err() { "*" } else { "" }
