@@ -36,6 +36,12 @@ abigen!(
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
+abigen!(
+    PriceFeedDouble,
+    "node_modules/@exactly-protocol/protocol/deployments/goerli/PriceFeedWBTC.json",
+    event_derives(serde::Deserialize, serde::Serialize)
+);
+
 abigen! {
     LidoOracle,
     "lib/abi/LidoOracle.json",

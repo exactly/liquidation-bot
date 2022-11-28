@@ -25,20 +25,37 @@ pub struct PriceRate {
     pub rate: U256,
     pub event_emitter: Option<Address>,
 }
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct PriceDouble {
+    pub price_feed_one: Address,
+    pub price_feed_two: Address,
+    pub base_unit: U256,
+    pub decimals: U256,
+    pub price_one: U256,
+    pub price_two: U256,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum PriceFeedType {
+    Single(PriceRate),
+    Double(PriceDouble),
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct PriceFeedController {
     pub address: Address,
     pub main_price_feed: Option<Box<PriceFeedController>>,
-    pub event_emitter: Option<Address>,
-    pub wrapper: Option<PriceRate>,
+    pub event_emitters: Vec<Address>,
+    pub wrapper: Option<PriceFeedType>,
 }
 
 impl PriceFeedController {
-    pub fn main_price_feed(address: Address, event_emitter: Option<Address>) -> Self {
+    pub fn main_price_feed(address: Address, event_emitters: Option<Vec<Address>>) -> Self {
         Self {
             address,
             main_price_feed: None,
-            event_emitter,
+            event_emitters: event_emitters.unwrap_or_default(),
             wrapper: None,
         }
     }
