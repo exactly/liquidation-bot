@@ -2,7 +2,7 @@ extern crate dotenv;
 
 use ethers::prelude::{coins_bip39::English, k256::ecdsa::SigningKey, MnemonicBuilder, Wallet};
 use ethers::types::U256;
-use ethers::utils;
+use ethers::utils::{self, ParseUnits};
 use std::env;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -72,6 +72,10 @@ impl Default for Config {
             18,
         )
         .unwrap();
+        let repay_offset = match repay_offset {
+            ParseUnits::U256(repay_offset) => repay_offset,
+            _ => U256::from(0),
+        };
 
         let liquidate_unprofitable =
             Arc::new(env::var("LIQUIDATE_UNPROFITABLE").unwrap_or_else(|_| "false".into()))
