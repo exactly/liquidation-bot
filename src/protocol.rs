@@ -401,11 +401,21 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
     async fn update_price_lido(
         price_feed: &mut PriceFeedController,
-        main_price: U256,
         block: U64,
         client: Arc<SignerMiddleware<M, S>>,
         price_decimals: U256,
     ) -> Result<U256> {
+        let main_price: U256 = if let Some(main_price_feed) = &mut price_feed.main_price_feed {
+            let contract = PriceFeed::new(main_price_feed.address, Arc::clone(&client));
+            contract
+                .latest_answer()
+                .block(block)
+                .call()
+                .await?
+                .into_raw()
+        } else {
+            U256::zero()
+        };
         if let Some(PriceFeedType::Single(wrapper)) = price_feed.wrapper.as_mut() {
             let price_feed_contract = PriceFeedLido::new(wrapper.address, Arc::clone(&client));
             let conversion_selector_method: ContractCall<SignerMiddleware<M, S>, U256> =
@@ -419,11 +429,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         Err(eyre!("Price feed not found"))
     }
 
-    async fn update_prices(&mut self, block: U64) -> Result<()> {
+    async fn update_prices(&mut self, on_market: Address, block: U64) -> Result<()> {
         let price_feed: Vec<PriceFeed<SignerMiddleware<M, S>>> = self
             .markets
             .iter()
-            .filter(|(_, v)| v.listed && v.price_feed.is_some() && !v.base_market)
+            .filter(|(k, v)| {
+                **k == on_market && v.listed && v.price_feed.is_some() && !v.base_market
+            })
             .map(|(_, market)| {
                 PriceFeed::new(
                     market.price_feed.as_ref().unwrap().address,
@@ -445,10 +457,12 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             .call_raw()
             .await?;
 
-        for (market, result) in self
+        for ((_, market), result) in self
             .markets
-            .values_mut()
-            .filter(|m| m.listed && m.price_feed.is_some() && !m.base_market)
+            .iter_mut()
+            .filter(|(k, m)| {
+                **k == on_market && m.listed && m.price_feed.is_some() && !m.base_market
+            })
             .zip(results)
         {
             let value = result.clone().into_int().unwrap();
@@ -459,7 +473,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     PriceFeedType::Single(_) => {
                         Self::update_price_lido(
                             market.price_feed.as_mut().unwrap(),
-                            value,
                             block,
                             Arc::clone(&self.client),
                             self.price_decimals,
@@ -622,7 +635,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     },
                     data.market,
                 );
-                self.update_prices(meta.block_number).await?;
+                self.update_prices(data.market, meta.block_number).await?;
                 self.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
@@ -782,8 +795,9 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     market.base_market = true;
                     return Ok(LogIterating::NextLog);
                 }
+                let on_market = data.market;
                 self.handle_price_feed(data, &meta).await?;
-                self.update_prices(meta.block_number).await?;
+                self.update_prices(on_market, meta.block_number).await?;
                 self.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
@@ -802,27 +816,26 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         .as_mut()
                         .filter(|p| p.event_emitters.contains(&meta.address))
                     {
-                        let price = if let Some(wrapper_type) = price_feed.wrapper.as_mut() {
-                            match wrapper_type {
-                                PriceFeedType::Single(wrapper) => {
-                                    wrapper.main_price = data.current.into_raw();
-                                    wrapper
-                                        .rate
-                                        .mul_div_down(wrapper.main_price, wrapper.base_unit)
-                                        * U256::exp10(18 - self.price_decimals.as_usize())
-                                }
-                                PriceFeedType::Double(wrapper) => {
-                                    if meta.address == price_feed.event_emitters[0] {
-                                        wrapper.price_one = data.current.into_raw();
-                                    } else if meta.address == price_feed.event_emitters[1] {
-                                        wrapper.price_two = data.current.into_raw();
-                                    }
-                                    wrapper
-                                        .price_one
-                                        .mul_div_down(wrapper.price_two, wrapper.base_unit)
-                                        * U256::exp10(18 - self.price_decimals.as_usize())
-                                }
+                        let price = if let Some(PriceFeedType::Single(wrapper)) =
+                            price_feed.wrapper.as_mut()
+                        {
+                            wrapper.main_price = data.current.into_raw();
+                            wrapper
+                                .rate
+                                .mul_div_down(wrapper.main_price, wrapper.base_unit)
+                                * U256::exp10(18 - self.price_decimals.as_usize())
+                        } else if let Some(PriceFeedType::Double(wrapper)) =
+                            price_feed.wrapper.as_mut()
+                        {
+                            if meta.address == price_feed.event_emitters[0] {
+                                wrapper.price_one = data.current.into_raw();
+                            } else if meta.address == price_feed.event_emitters[1] {
+                                wrapper.price_two = data.current.into_raw();
                             }
+                            wrapper
+                                .price_one
+                                .mul_div_down(wrapper.price_two, wrapper.base_unit)
+                                * U256::exp10(18 - self.price_decimals.as_usize())
                         } else {
                             data.current.into_raw()
                                 * U256::exp10(18 - self.price_decimals.as_usize())
@@ -999,8 +1012,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 price_feed_two,
                 base_unit: base_unit_double,
                 decimals,
-                price_one: U256::from(1u8),
-                price_two: U256::from(1u8),
+                price_one: U256::from(0u8),
+                price_two: U256::from(0u8),
             }));
             vec![price_feed_one, price_feed_two]
         } else {
