@@ -72,6 +72,7 @@ enum TaskActivity {
 struct ContractKey {
     address: Address,
     kind: ContractKeyKind,
+    index: usize,
 }
 
 macro_rules! compare {
@@ -161,6 +162,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             ContractKey {
                 address: (*auditor).address(),
                 kind: ContractKeyKind::Auditor,
+                index: 0,
             },
             (*auditor).address(),
         );
@@ -632,6 +634,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     ContractKey {
                         address: data.market,
                         kind: ContractKeyKind::Market,
+                        index: 0,
                     },
                     data.market,
                 );
@@ -1042,11 +1045,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             price_feed_address
         };
         price_feed.event_emitters = event_emitters;
-        for event_emitter in &price_feed.event_emitters {
+        for (index, event_emitter) in price_feed.event_emitters.iter().enumerate() {
+            println!("added {:?} to listen", event_emitter);
             self.contracts_to_listen.insert(
                 ContractKey {
                     address: data.market,
                     kind: ContractKeyKind::PriceFeed,
+                    index,
                 },
                 *event_emitter,
             );
@@ -1069,6 +1074,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 ContractKey {
                     address: wrapper.address,
                     kind: ContractKeyKind::PriceFeed,
+                    index: 0,
                 },
                 oracle,
             );
