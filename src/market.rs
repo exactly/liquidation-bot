@@ -5,6 +5,7 @@ use ethers::abi::Address;
 use ethers::prelude::{abigen, Middleware, Signer, SignerMiddleware, U256};
 
 use ethers::types::I256;
+use serde::{Deserialize, Serialize};
 
 use super::fixed_point_math::{FixedPointMath, FixedPointMathGen};
 
@@ -16,7 +17,7 @@ abigen!(
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize)]
 pub struct PriceRate {
     pub address: Address,
     pub conversion_selector: [u8; 4],
@@ -26,7 +27,7 @@ pub struct PriceRate {
     pub event_emitter: Option<Address>,
 }
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize)]
 pub struct PriceDouble {
     pub price_feed_one: Address,
     pub price_feed_two: Address,
@@ -36,13 +37,13 @@ pub struct PriceDouble {
     pub price_two: U256,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum PriceFeedType {
     Single(PriceRate),
     Double(PriceDouble),
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct PriceFeedController {
     pub address: Address,
     pub main_price_feed: Option<Box<PriceFeedController>>,
@@ -61,7 +62,7 @@ impl PriceFeedController {
     }
 }
 
-#[derive(Eq, PartialEq, Debug, Default)]
+#[derive(Eq, PartialEq, Debug, Default, Serialize, Deserialize)]
 pub struct FixedPool {
     pub borrowed: U256,
     pub supplied: U256,
@@ -69,8 +70,9 @@ pub struct FixedPool {
     pub last_accrual: U256,
 }
 
-pub struct Market<M, S> {
-    pub contract: crate::generate_abi::market_protocol::MarketProtocol<SignerMiddleware<M, S>>,
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct Market {
+    pub contract: Address,
     pub interest_rate_model: Address,
     pub price: U256,
     pub penalty_rate: U256,
@@ -99,21 +101,18 @@ pub struct Market<M, S> {
     pub base_market: bool,
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> Eq for Market<M, S> {}
+impl Eq for Market {}
 
-impl<M: 'static + Middleware, S: 'static + Signer> PartialEq for Market<M, S> {
+impl PartialEq for Market {
     fn eq(&self, other: &Self) -> bool {
-        (*self.contract).address() == (*other.contract).address()
+        self.contract == other.contract
     }
 }
 
-impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
-    pub fn new(address: Address, client: &Arc<SignerMiddleware<M, S>>) -> Self {
+impl Market {
+    pub fn new(address: Address) -> Self {
         Self {
-            contract: crate::generate_abi::market_protocol::MarketProtocol::new(
-                address,
-                Arc::clone(client),
-            ),
+            contract: address,
             interest_rate_model: Default::default(),
             price: Default::default(),
             penalty_rate: Default::default(),
@@ -141,6 +140,13 @@ impl<M: 'static + Middleware, S: 'static + Signer> Market<M, S> {
             asset: Default::default(),
             base_market: false,
         }
+    }
+
+    pub fn contract<M: 'static + Middleware, S: 'static + Signer>(
+        &self,
+        client: Arc<SignerMiddleware<M, S>>,
+    ) -> crate::generate_abi::market_protocol::MarketProtocol<SignerMiddleware<M, S>> {
+        crate::generate_abi::market_protocol::MarketProtocol::new(self.contract, client)
     }
 
     pub fn total_assets(&self, timestamp: U256) -> U256 {

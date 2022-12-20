@@ -11,6 +11,7 @@ liquidation-stats = []
 complete-compare = []
 
 [dependencies]
+cacache = "10.0.1"
 dotenv = "0.15"
 ethers = { version = "1.0.0", features = ['ws', 'rustls'] }
 eyre = "0.6.8"
