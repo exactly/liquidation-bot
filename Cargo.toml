@@ -1,6 +1,6 @@
 [package]
 name = "liq-bot"
-version = "0.1.6"
+version = "0.1.7"
 license = "MIT"
 authors = ["Rodrigo Bronzelle <bronzelle@gmail.com>", "danilo neves cruz <cruzdanilo@gmail.com>"]
 edition = "2021"
