@@ -23,6 +23,7 @@ use ethers::types::H256;
 use eyre::{eyre, Result};
 use log::{error, info, warn};
 use sentry::{add_breadcrumb, Breadcrumb, Level};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::backtrace::Backtrace;
 use std::cmp::Reverse;
@@ -46,9 +47,12 @@ use crate::protocol::LiquidateFilter;
 const DEFAULT_GAS_PRICE: U256 = math::make_u256(10_000u64);
 pub const BASE_FEED: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
+const CACHE_PATH: &str = "cache";
+const CACHE_PROTOCOL: &str = "protocol";
+
 pub type TokenPairFeeMap = HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>;
 
-#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
+#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug, Serialize, Deserialize)]
 enum ContractKeyKind {
     Market,
     PriceFeed,
@@ -68,7 +72,7 @@ enum TaskActivity {
     UpdateUser((Option<U64>, Address)),
 }
 
-#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
+#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug, Serialize, Deserialize)]
 struct ContractKey {
     address: Address,
     kind: ContractKeyKind,
@@ -89,31 +93,96 @@ macro_rules! compare {
 }
 
 // #[derive(Debug)]
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct ProtocolData {
+    pub last_sync: (U64, i128, i128),
+    pub markets: HashMap<Address, Market>,
+    pub sp_fee_rate: U256,
+    pub accounts: HashMap<Address, Account>,
+    #[serde(with = "hashmap_as_vector")]
+    pub contracts_to_listen: HashMap<ContractKey, Address>,
+    pub comparison_enabled: bool,
+    pub liquidation_incentive: LiquidationIncentive,
+    pub market_weth_address: Address,
+    pub price_decimals: U256,
+    pub repay_offset: U256,
+}
+
+impl ProtocolData {
+    pub async fn from_cache_or_new<M: 'static + Middleware, S: 'static + Signer>(
+        auditor: &Auditor<SignerMiddleware<M, S>>,
+        deployed_block: u64,
+        market_weth_address: Address,
+        config: &Config,
+    ) -> Result<ProtocolData> {
+        let protocol_data = match cacache::read(CACHE_PATH, CACHE_PROTOCOL).await {
+            Ok(cache) => {
+                if let Ok(protocol_data) = serde_json::from_slice::<ProtocolData>(&cache) {
+                    protocol_data
+                } else {
+                    Self::new(auditor, deployed_block, config, market_weth_address).await?
+                }
+            }
+            Err(e) => {
+                println!("Failed to load protocol data from cache: {}", e);
+                Self::new(auditor, deployed_block, config, market_weth_address).await?
+            }
+        };
+        Ok(protocol_data)
+    }
+    async fn new<M: 'static + Middleware, S: 'static + Signer>(
+        auditor: &Auditor<SignerMiddleware<M, S>>,
+        deployed_block: u64,
+        config: &Config,
+        market_weth_address: ethers::types::H160,
+    ) -> Result<ProtocolData, eyre::ErrReport> {
+        let auditor_markets = auditor.all_markets().call().await?;
+        let mut markets = HashMap::<Address, Market>::new();
+        for market in auditor_markets {
+            markets
+                .entry(market)
+                .or_insert_with_key(|key| Market::new(*key));
+        }
+        let mut contracts_to_listen = HashMap::new();
+        contracts_to_listen.insert(
+            ContractKey {
+                address: (*auditor).address(),
+                kind: ContractKeyKind::Auditor,
+                index: 0,
+            },
+            (*auditor).address(),
+        );
+        Ok(ProtocolData {
+            last_sync: (U64::from(deployed_block), -1, -1),
+            markets,
+            sp_fee_rate: U256::zero(),
+            accounts: HashMap::new(),
+            contracts_to_listen,
+            comparison_enabled: config.comparison_enabled,
+            liquidation_incentive: Default::default(),
+            market_weth_address,
+            price_decimals: U256::zero(),
+            repay_offset: config.repay_offset,
+        })
+    }
+}
+
 pub struct Protocol<M, W, S> {
     client: Arc<SignerMiddleware<M, S>>,
-    last_sync: (U64, i128, i128),
     previewer: Previewer<SignerMiddleware<M, S>>,
     auditor: Auditor<SignerMiddleware<M, S>>,
-    markets: HashMap<Address, Market<M, S>>,
-    sp_fee_rate: U256,
-    accounts: HashMap<Address, Account>,
-    contracts_to_listen: HashMap<ContractKey, Address>,
-    comparison_enabled: bool,
-    liquidation_incentive: LiquidationIncentive,
-    market_weth_address: Address,
     liquidation: Arc<Mutex<Liquidation<M, W, S>>>,
     liquidation_sender: Sender<LiquidationData>,
     token_pairs: Arc<TokenPairFeeMap>,
     tokens: Arc<HashSet<Address>>,
-    price_decimals: U256,
-    repay_offset: U256,
+    data: ProtocolData,
 }
 
 impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> std::fmt::Debug
     for Protocol<M, W, S>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CreditService").finish()
+        f.debug_struct("Protocol").finish()
     }
 }
 
@@ -149,24 +218,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         let (deployed_block, auditor, previewer) =
             Self::get_contracts(Arc::clone(&client), config).await;
 
-        let auditor_markets = auditor.all_markets().call().await?;
-        let mut markets = HashMap::<Address, Market<M, S>>::new();
-        for market in auditor_markets {
-            markets
-                .entry(market)
-                .or_insert_with_key(|key| Market::new(*key, &client));
-        }
-        let mut contracts_to_listen = HashMap::new();
-
-        contracts_to_listen.insert(
-            ContractKey {
-                address: (*auditor).address(),
-                kind: ContractKeyKind::Auditor,
-                index: 0,
-            },
-            (*auditor).address(),
-        );
-
         let (market_weth_address, _, _) = Self::parse_abi(&format!(
             "node_modules/@exactly-protocol/protocol/deployments/{}/MarketWETH.json",
             config.chain_id_name
@@ -194,24 +245,19 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             let _ = Liquidation::run(liquidation_clone, liquidation_receiver).await;
         });
 
+        let data =
+            ProtocolData::from_cache_or_new(&auditor, deployed_block, market_weth_address, config)
+                .await?;
+
         Ok(Protocol {
             client: Arc::clone(&client),
-            last_sync: (U64::from(deployed_block), -1, -1),
             auditor,
             previewer,
-            markets,
-            sp_fee_rate: U256::zero(),
-            accounts: HashMap::new(),
-            contracts_to_listen,
-            comparison_enabled: config.comparison_enabled,
-            liquidation_incentive: Default::default(),
-            market_weth_address,
             liquidation,
             liquidation_sender,
             tokens,
             token_pairs,
-            price_decimals: U256::zero(),
-            repay_offset: config.repay_offset,
+            data,
         })
     }
 
@@ -227,13 +273,6 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         self.previewer = previewer;
         (*self.liquidation.lock().await)
             .set_liquidator(Arc::clone(&client_relayer), config.chain_id_name.clone());
-        for market in self.markets.values_mut() {
-            let address = market.contract.address();
-            market.contract = crate::generate_abi::market_protocol::MarketProtocol::new(
-                address,
-                Arc::clone(&client),
-            );
-        }
     }
 
     pub async fn launch(self) -> Result<Self, Self>
@@ -294,7 +333,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         }
         let file = File::create("data.log").unwrap();
         let mut writer = BufWriter::new(file);
-        let mut first_block = service.lock().await.last_sync.0;
+        let mut first_block = service.lock().await.data.last_sync.0;
         let mut last_block = first_block + PAGE_SIZE;
         let mut latest_block = U64::zero();
         let mut getting_logs = true;
@@ -304,14 +343,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 let service_unlocked = service.lock().await;
                 client = Arc::clone(&service_unlocked.client);
                 if latest_block.is_zero() {
-                    latest_block = client
-                        .get_block_number()
-                        .await
-                        .unwrap_or(service_unlocked.last_sync.0);
+                    let gbn = client.get_block_number().await;
+                    latest_block = gbn.unwrap_or(service_unlocked.data.last_sync.0);
                 }
 
                 let mut filter = Filter::new().from_block(first_block).address(
                     service_unlocked
+                        .data
                         .contracts_to_listen
                         .values()
                         .cloned()
@@ -339,7 +377,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         match status {
                             Ok(result) => {
                                 if let LogIterating::UpdateFilters = result {
-                                    first_block = me.last_sync.0;
+                                    first_block = me.data.last_sync.0;
                                     continue 'filter;
                                 }
                             }
@@ -352,6 +390,14 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     if last_block >= latest_block {
                         first_block = latest_block;
                         getting_logs = false;
+                        debounce_tx
+                            .send(TaskActivity::UpdateAll(Some(latest_block)))
+                            .await
+                            .unwrap();
+                        let backup = serde_json::to_vec(&me.data).unwrap();
+                        cacache::write(CACHE_PATH, CACHE_PROTOCOL, &backup)
+                            .await
+                            .unwrap();
                     } else {
                         first_block = last_block + 1u64;
                         last_block = if first_block + PAGE_SIZE > latest_block {
@@ -372,8 +418,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                                 match status {
                                     Ok(result) => {
                                         if let LogIterating::UpdateFilters = result {
-                                            first_block = me.last_sync.0;
+                                            first_block = me.data.last_sync.0;
                                             continue 'filter;
+                                        } else {
+                                            let backup = serde_json::to_vec(&me.data).unwrap();
+                                            cacache::write(CACHE_PATH, CACHE_PROTOCOL, &backup)
+                                                .await
+                                                .unwrap();
                                         }
                                     }
                                     Err(e) => {
@@ -433,6 +484,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
     async fn update_prices(&mut self, on_market: Address, block: U64) -> Result<()> {
         let price_feed: Vec<PriceFeed<SignerMiddleware<M, S>>> = self
+            .data
             .markets
             .iter()
             .filter(|(k, v)| {
@@ -460,6 +512,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             .await?;
 
         for ((_, market), result) in self
+            .data
             .markets
             .iter_mut()
             .filter(|(k, m)| {
@@ -477,7 +530,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                             market.price_feed.as_mut().unwrap(),
                             block,
                             Arc::clone(&self.client),
-                            self.price_decimals,
+                            self.data.price_decimals,
                         )
                         .await?
                     }
@@ -512,11 +565,11 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         wrapper
                             .price_one
                             .mul_div_down(wrapper.price_two, wrapper.base_unit)
-                            * U256::exp10(18 - self.price_decimals.as_usize())
+                            * U256::exp10(18 - self.data.price_decimals.as_usize())
                     }
                 }
             } else {
-                value * U256::exp10(18 - self.price_decimals.as_usize())
+                value * U256::exp10(18 - self.data.price_decimals.as_usize())
             };
             market.price = price;
         }
@@ -547,11 +600,11 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             meta.block_number,
             meta.transaction_index.as_u64() as i128,
             meta.log_index.as_u128() as i128,
-        ) <= self.last_sync
+        ) <= self.data.last_sync
         {
             return Ok(LogIterating::NextLog);
         }
-        self.last_sync = (
+        self.data.last_sync = (
             meta.block_number,
             meta.transaction_index.as_u64() as i128,
             meta.log_index.as_u128() as i128,
@@ -559,39 +612,43 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         sentry_breadcrumb(&meta, topics, log_data, &event);
         match event {
             ExactlyEvents::MaxFuturePoolsSet(data) => {
-                self.markets
+                self.data
+                    .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|key| Market::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key))
                     .max_future_pools = data.max_future_pools.as_u32() as u8;
             }
 
             ExactlyEvents::EarningsAccumulatorSmoothFactorSet(data) => {
-                self.markets
+                self.data
+                    .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|key| Market::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key))
                     .earnings_accumulator_smooth_factor = data.earnings_accumulator_smooth_factor;
             }
 
             ExactlyEvents::MarketListed(data) => {
                 let mut market = self
+                    .data
                     .markets
                     .entry(data.market)
-                    .or_insert_with_key(|key| Market::new(*key, &self.client));
+                    .or_insert_with_key(|key| Market::new(*key));
                 market.decimals = data.decimals;
-                market.smart_pool_fee_rate = self.sp_fee_rate;
+                market.smart_pool_fee_rate = self.data.sp_fee_rate;
                 market.listed = true;
+                let contract = market.contract(Arc::clone(&self.client));
                 let mut multicall =
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                         .await
                         .unwrap();
-                multicall.add_call(market.contract.max_future_pools(), false);
-                multicall.add_call(market.contract.earnings_accumulator_smooth_factor(), false);
-                multicall.add_call(market.contract.interest_rate_model(), false);
-                multicall.add_call(market.contract.penalty_rate(), false);
-                multicall.add_call(market.contract.treasury_fee_rate(), false);
-                multicall.add_call(market.contract.asset(), false);
-                multicall.add_call(market.contract.last_accumulator_accrual(), false);
-                multicall.add_call(market.contract.last_floating_debt_update(), false);
+                multicall.add_call(contract.max_future_pools(), false);
+                multicall.add_call(contract.earnings_accumulator_smooth_factor(), false);
+                multicall.add_call(contract.interest_rate_model(), false);
+                multicall.add_call(contract.penalty_rate(), false);
+                multicall.add_call(contract.treasury_fee_rate(), false);
+                multicall.add_call(contract.asset(), false);
+                multicall.add_call(contract.last_accumulator_accrual(), false);
+                multicall.add_call(contract.last_floating_debt_update(), false);
                 multicall = multicall
                     .version(MulticallVersion::Multicall)
                     .block(meta.block_number);
@@ -630,7 +687,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     market.floating_b = floating_b;
                     market.floating_max_utilization = floating_max_utilization;
                 }
-                self.contracts_to_listen.insert(
+                self.data.contracts_to_listen.insert(
                     ContractKey {
                         address: data.market,
                         kind: ContractKeyKind::Market,
@@ -639,7 +696,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     data.market,
                 );
                 self.update_prices(data.market, meta.block_number).await?;
-                self.last_sync = (
+                self.data.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
                     meta.log_index.as_u128() as i128,
@@ -648,7 +705,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
 
             ExactlyEvents::InterestRateModelSet(data) => {
-                let mut market = self.markets.get_mut(&meta.address).unwrap();
+                let mut market = self.data.markets.get_mut(&meta.address).unwrap();
                 market.interest_rate_model = data.interest_rate_model;
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
@@ -670,7 +727,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     market.floating_b = floating_b;
                     market.floating_max_utilization = floating_max_utilization;
                 }
-                self.last_sync = (
+                self.data.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
                     meta.log_index.as_u128() as i128,
@@ -680,16 +737,18 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
             ExactlyEvents::Transfer(data) => {
                 if data.to != Address::zero() {
-                    self.accounts
+                    self.data
+                        .accounts
                         .entry(data.to)
-                        .or_insert_with_key(|key| Account::new(*key, &self.markets))
+                        .or_insert_with_key(|key| Account::new(*key, &self.data.markets))
                         .positions
                         .entry(meta.address)
                         .or_default()
                         .floating_deposit_shares += data.amount;
                 }
                 if data.from != Address::zero() {
-                    self.accounts
+                    self.data
+                        .accounts
                         .get_mut(&data.from)
                         .unwrap()
                         .positions
@@ -699,45 +758,51 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 }
             }
             ExactlyEvents::Borrow(data) => {
-                self.accounts
+                self.data
+                    .accounts
                     .entry(data.borrower)
-                    .or_insert_with_key(|key| Account::new(*key, &self.markets))
+                    .or_insert_with_key(|key| Account::new(*key, &self.data.markets))
                     .positions
                     .entry(meta.address)
                     .or_default()
                     .floating_borrow_shares += data.shares;
             }
             ExactlyEvents::Repay(data) => {
-                self.accounts
+                self.data
+                    .accounts
                     .entry(data.borrower)
-                    .or_insert_with_key(|key| Account::new(*key, &self.markets))
+                    .or_insert_with_key(|key| Account::new(*key, &self.data.markets))
                     .positions
                     .entry(meta.address)
                     .or_default()
                     .floating_borrow_shares -= data.shares;
             }
             ExactlyEvents::DepositAtMaturity(data) => {
-                self.accounts
+                self.data
+                    .accounts
                     .entry(data.owner)
-                    .or_insert_with(|| Account::new(data.owner, &self.markets))
+                    .or_insert_with(|| Account::new(data.owner, &self.data.markets))
                     .deposit_at_maturity(&data, &meta.address);
             }
             ExactlyEvents::WithdrawAtMaturity(data) => {
-                self.accounts
+                self.data
+                    .accounts
                     .entry(data.owner)
-                    .or_insert_with(|| Account::new(data.owner, &self.markets))
+                    .or_insert_with(|| Account::new(data.owner, &self.data.markets))
                     .withdraw_at_maturity(data, &meta.address);
             }
             ExactlyEvents::BorrowAtMaturity(data) => {
-                self.accounts
+                self.data
+                    .accounts
                     .entry(data.borrower)
-                    .or_insert_with(|| Account::new(data.borrower, &self.markets))
+                    .or_insert_with(|| Account::new(data.borrower, &self.data.markets))
                     .borrow_at_maturity(&data, &meta.address);
             }
             ExactlyEvents::RepayAtMaturity(data) => {
-                self.accounts
+                self.data
+                    .accounts
                     .entry(data.borrower)
-                    .or_insert_with(|| Account::new(data.borrower, &self.markets))
+                    .or_insert_with(|| Account::new(data.borrower, &self.data.markets))
                     .repay_at_maturity(&data, &meta.address);
             }
             ExactlyEvents::Liquidate(data) => {
@@ -751,36 +816,40 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
 
             ExactlyEvents::AdjustFactorSet(data) => {
-                self.markets
+                self.data
+                    .markets
                     .entry(data.market)
-                    .or_insert_with_key(|key| Market::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key))
                     .adjust_factor = data.adjust_factor;
             }
 
             ExactlyEvents::PenaltyRateSet(data) => {
-                self.markets
+                self.data
+                    .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|key| Market::new(*key, &self.client))
+                    .or_insert_with_key(|key| Market::new(*key))
                     .penalty_rate = data.penalty_rate;
             }
 
             ExactlyEvents::MarketEntered(data) => {
-                self.accounts
+                self.data
+                    .accounts
                     .entry(data.account)
-                    .or_insert_with(|| Account::new(data.account, &self.markets))
+                    .or_insert_with(|| Account::new(data.account, &self.data.markets))
                     .set_collateral(&data.market);
             }
 
             ExactlyEvents::MarketExited(data) => {
-                self.accounts
+                self.data
+                    .accounts
                     .entry(data.account)
-                    .or_insert_with(|| Account::new(data.account, &self.markets))
+                    .or_insert_with(|| Account::new(data.account, &self.data.markets))
                     .unset_collateral(&data.market);
             }
 
             ExactlyEvents::BackupFeeRateSet(data) => {
-                self.sp_fee_rate = data.backup_fee_rate;
-                for market in self.markets.values_mut() {
+                self.data.sp_fee_rate = data.backup_fee_rate;
+                for market in self.data.markets.values_mut() {
                     market.smart_pool_fee_rate = data.backup_fee_rate;
                 }
             }
@@ -788,20 +857,21 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             ExactlyEvents::PriceFeedSetFilter(data) => {
                 if data.price_feed == Address::from_str(BASE_FEED).unwrap() {
                     let market = self
+                        .data
                         .markets
                         .entry(data.market)
-                        .or_insert_with_key(|key| Market::new(*key, &self.client));
+                        .or_insert_with_key(|key| Market::new(*key));
 
                     market.price_feed =
                         Some(PriceFeedController::main_price_feed(data.price_feed, None));
-                    market.price = U256::exp10(self.price_decimals.as_usize());
+                    market.price = U256::exp10(self.data.price_decimals.as_usize());
                     market.base_market = true;
                     return Ok(LogIterating::NextLog);
                 }
                 let on_market = data.market;
                 self.handle_price_feed(data, &meta).await?;
                 self.update_prices(on_market, meta.block_number).await?;
-                self.last_sync = (
+                self.data.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
                     meta.log_index.as_u128() as i128,
@@ -813,7 +883,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
 
             ExactlyEvents::AnswerUpdated(data) => {
-                self.markets.iter_mut().for_each(|(_, market)| {
+                self.data.markets.iter_mut().for_each(|(_, market)| {
                     if let Some(price_feed) = market
                         .price_feed
                         .as_mut()
@@ -826,7 +896,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                             wrapper
                                 .rate
                                 .mul_div_down(wrapper.main_price, wrapper.base_unit)
-                                * U256::exp10(18 - self.price_decimals.as_usize())
+                                * U256::exp10(18 - self.data.price_decimals.as_usize())
                         } else if let Some(PriceFeedType::Double(wrapper)) =
                             price_feed.wrapper.as_mut()
                         {
@@ -838,10 +908,10 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                             wrapper
                                 .price_one
                                 .mul_div_down(wrapper.price_two, wrapper.base_unit)
-                                * U256::exp10(18 - self.price_decimals.as_usize())
+                                * U256::exp10(18 - self.data.price_decimals.as_usize())
                         } else {
                             data.current.into_raw()
-                                * U256::exp10(18 - self.price_decimals.as_usize())
+                                * U256::exp10(18 - self.data.price_decimals.as_usize())
                         };
                         market.price = price;
                     };
@@ -850,9 +920,10 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
             ExactlyEvents::MarketUpdate(data) => {
                 let market = self
+                    .data
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| Market::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address));
                 market.floating_deposit_shares = data.floating_deposit_shares;
                 market.floating_assets = data.floating_assets;
                 market.earnings_accumulator = data.earnings_accumulator;
@@ -862,26 +933,29 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
             ExactlyEvents::FloatingDebtUpdate(data) => {
                 let market = self
+                    .data
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| Market::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address));
                 market.floating_utilization = data.utilization;
                 market.last_floating_debt_update = data.timestamp;
             }
 
             ExactlyEvents::AccumulatorAccrual(data) => {
                 let market = self
+                    .data
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| Market::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address));
                 market.last_accumulator_accrual = data.timestamp;
             }
 
             ExactlyEvents::FixedEarningsUpdate(data) => {
                 let market = self
+                    .data
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| Market::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address));
 
                 let pool = market.fixed_pools.entry(data.maturity).or_default();
                 pool.last_accrual = data.timestamp;
@@ -890,18 +964,19 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
             ExactlyEvents::TreasurySet(data) => {
                 let market = self
+                    .data
                     .markets
                     .entry(meta.address)
-                    .or_insert_with_key(|address| Market::new(*address, &self.client));
+                    .or_insert_with_key(|address| Market::new(*address));
                 market.treasury_fee_rate = data.treasury_fee_rate;
             }
 
             ExactlyEvents::LiquidationIncentiveSet(data) => {
-                self.liquidation_incentive = data.liquidation_incentive;
+                self.data.liquidation_incentive = data.liquidation_incentive;
             }
 
             ExactlyEvents::Initialized(_) => {
-                self.price_decimals = self
+                self.data.price_decimals = self
                     .auditor
                     .price_decimals()
                     .block(meta.block_number)
@@ -910,7 +985,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
 
             ExactlyEvents::PostTotalShares(data) => {
-                self.markets
+                self.data
+                    .markets
                     .iter_mut()
                     .filter(|(_, market)| {
                         if let Some(price_feed) = market.price_feed.as_ref() {
@@ -936,7 +1012,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                             market.price = wrapper
                                 .rate
                                 .mul_div_down(wrapper.main_price, wrapper.base_unit)
-                                * U256::exp10(18 - self.price_decimals.as_usize());
+                                * U256::exp10(18 - self.data.price_decimals.as_usize());
                         }
                     });
             }
@@ -1046,8 +1122,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         };
         price_feed.event_emitters = event_emitters;
         for (index, event_emitter) in price_feed.event_emitters.iter().enumerate() {
-            println!("added {:?} to listen", event_emitter);
-            self.contracts_to_listen.insert(
+            self.data.contracts_to_listen.insert(
                 ContractKey {
                     address: data.market,
                     kind: ContractKeyKind::PriceFeed,
@@ -1057,9 +1132,10 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             );
         }
         let market = self
+            .data
             .markets
             .entry(data.market)
-            .or_insert_with_key(|key| Market::new(*key, &self.client));
+            .or_insert_with_key(|key| Market::new(*key));
         market.price_feed = Some(price_feed);
         if let Some(PriceFeedType::Single(wrapper)) = market
             .price_feed
@@ -1070,7 +1146,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             let lido = PriceFeedLido::new(wrapper.address, Arc::clone(&self.client));
             let oracle = lido.get_oracle().block(meta.block_number).call().await?;
             wrapper.event_emitter = Some(oracle);
-            self.contracts_to_listen.insert(
+            self.data.contracts_to_listen.insert(
                 ContractKey {
                     address: wrapper.address,
                     kind: ContractKeyKind::PriceFeed,
@@ -1100,13 +1176,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
         let to_timestamp = block.timestamp;
 
-        if self.comparison_enabled {
+        if self.data.comparison_enabled {
             self.compare_accounts(block_number, to_timestamp).await?;
         }
 
         let mut liquidations: HashMap<Address, (Account, Repay)> = HashMap::new();
         if let Some(address) = &user {
-            let account = &self.accounts[address];
+            let account = &self.data.accounts[address];
             self.check_liquidations_on_account(
                 address,
                 account,
@@ -1115,7 +1191,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 &mut liquidations,
             );
         } else {
-            for (address, account) in &self.accounts {
+            for (address, account) in &self.data.accounts {
                 self.check_liquidations_on_account(
                     address,
                     account,
@@ -1128,7 +1204,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         info!(
             "accounts to liquidate {} / {}",
             liquidations.len(),
-            self.accounts.len()
+            self.data.accounts.len()
         );
         if !liquidations.is_empty() {
             self.liquidation_sender
@@ -1141,20 +1217,22 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     },
                     state: ProtocolState {
                         gas_price: *last_gas_price,
-                        markets: self.markets.keys().cloned().collect(),
+                        markets: self.data.markets.keys().cloned().collect(),
                         assets: self
+                            .data
                             .markets
                             .iter()
                             .map(|(address, market)| (*address, market.asset))
                             .collect(),
                         price_feeds: self
+                            .data
                             .markets
                             .iter()
                             .map(|(address, market)| {
                                 (*address, market.price_feed.as_ref().unwrap().address)
                             })
                             .collect(),
-                        price_decimals: self.price_decimals,
+                        price_decimals: self.data.price_decimals,
                     },
                 })
                 .await?;
@@ -1170,17 +1248,17 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         last_gas_price: &U256,
         liquidations: &mut HashMap<Address, (Account, Repay)>,
     ) {
-        let hf = Self::compute_hf(&self.markets, account, to_timestamp);
+        let hf = Self::compute_hf(&self.data.markets, account, to_timestamp);
         if let Ok((hf, _, _, repay)) = hf {
             if hf < math::WAD && repay.total_adjusted_debt != U256::zero() {
                 if let Some((profitable, _, _, _, _)) = Liquidation::<M, W, S>::is_profitable(
                     &repay,
-                    &self.liquidation_incentive,
+                    &self.data.liquidation_incentive,
                     *last_gas_price,
-                    self.markets[&self.market_weth_address].price,
+                    self.data.markets[&self.data.market_weth_address].price,
                     &self.token_pairs,
                     &self.tokens,
-                    self.repay_offset,
+                    self.data.repay_offset,
                 ) {
                     if profitable {
                         liquidations.insert(*address, (account.clone(), repay));
@@ -1394,13 +1472,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         let batch = 100;
         let mut positions = HashMap::<Address, HashMap<Address, MarketAccount>>::new();
 
-        while skip < self.accounts.len() {
+        while skip < self.data.accounts.len() {
             let mut multicall =
                 Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                     .await
                     .unwrap();
             let mut inputs: Vec<Address> = Vec::new();
-            for account in self.accounts.keys().skip(skip).take(batch) {
+            for account in self.data.accounts.keys().skip(skip).take(batch) {
                 inputs.push(*account);
 
                 multicall.add_call(self.previewer.exactly(*account), false);
@@ -1440,12 +1518,13 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         let mut success = true;
 
         let mut multicall_pool = Vec::new();
-        for _ in 0..(self.accounts.len() - 1 + batch) / batch {
+        for _ in 0..(self.data.accounts.len() - 1 + batch) / batch {
             multicall_pool.push(
                 Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?,
             );
         }
-        self.accounts
+        self.data
+            .accounts
             .iter()
             .enumerate()
             .for_each(|(i, (account, _))| {
@@ -1457,7 +1536,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 );
             });
 
-        if !self.accounts.is_empty() {
+        if !self.data.accounts.is_empty() {
             let mut tasks = Vec::new();
             for multicall in multicall_pool {
                 tasks.push(tokio::spawn(async move {
@@ -1472,7 +1551,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             for task in tasks {
                 responses.append(&mut task.await.unwrap()?);
             }
-            for (token, (address, _)) in responses.iter().zip(&self.accounts) {
+            for (token, (address, _)) in responses.iter().zip(&self.data.accounts) {
                 let v = token.clone().into_tokens();
                 let (adjusted_collateral, adjusted_debt): (U256, U256) = (
                     v[0].clone().into_uint().unwrap(),
@@ -1480,8 +1559,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 );
                 if adjusted_debt > U256::zero() {
                     let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
-                    if let Some(account) = self.accounts.get(address) {
-                        let hf = Self::compute_hf(&self.markets, account, timestamp).map(
+                    if let Some(account) = self.data.accounts.get(address) {
+                        let hf = Self::compute_hf(&self.data.markets, account, timestamp).map(
                             |(hf, collateral, debt, _)| {
                                 success &=
                                     compare!("health_factor", &account, "", previewer_hf, hf);
@@ -1507,6 +1586,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
         }
         if !success {
+            let _ = cacache::remove(CACHE_PATH, CACHE_PROTOCOL).await;
             panic!("compare accounts error");
         }
         Ok(())
@@ -1515,7 +1595,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
     #[cfg(feature = "complete-compare")]
     async fn compare_accounts(&self, block: U64, timestamp: U256) -> Result<()> {
         let previewer_accounts = &self.multicall_previewer(U64::from(&block)).await;
-        let accounts = &self.accounts;
+        let accounts = &self.data.accounts;
         let mut success = true;
         let mut compare_markets = true;
         let mut accounts_with_borrows = Vec::<Address>::new();
@@ -1537,7 +1617,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 let mut multicall =
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                         .await?;
-                for market in self.markets.values() {
+                for market in self.data.markets.values() {
                     if market.price_feed.is_some() && !market.base_market {
                         multicall.add_call(
                             self.auditor
@@ -1551,7 +1631,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     .block(block)
                     .call_raw()
                     .await?;
-                self.markets
+                self.data
+                    .markets
                     .values()
                     .filter(|market| market.price_feed.is_some() && !market.base_market)
                     .zip(&responses)
@@ -1559,7 +1640,11 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         success &= compare!(
                             "price",
                             "",
-                            format!("{:#?}/{:#?}", market.contract.address(), market.price_feed),
+                            format!(
+                                "{:#?}/{:#?}",
+                                market.contract(Arc::clone(&self.client)).address(),
+                                market.price_feed
+                            ),
                             response.clone().into_uint().unwrap(),
                             market.price
                         );
@@ -1569,24 +1654,64 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                     Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                         .await?;
                 const FIELDS: usize = 9;
-                for market in self.markets.values() {
-                    multicall.add_call(market.contract.floating_assets(), false);
-                    multicall.add_call(market.contract.last_accumulator_accrual(), false);
-                    multicall.add_call(market.contract.earnings_accumulator(), false);
-                    multicall.add_call(market.contract.earnings_accumulator_smooth_factor(), false);
-                    multicall.add_call(market.contract.floating_debt(), false);
-                    multicall.add_call(market.contract.total_floating_borrow_shares(), false);
-                    multicall.add_call(market.contract.last_floating_debt_update(), false);
-                    multicall.add_call(market.contract.floating_utilization(), false);
-                    multicall.add_call(market.contract.total_supply(), false);
+                for market in self.data.markets.values() {
+                    multicall.add_call(
+                        market.contract(Arc::clone(&self.client)).floating_assets(),
+                        false,
+                    );
+                    multicall.add_call(
+                        market
+                            .contract(Arc::clone(&self.client))
+                            .last_accumulator_accrual(),
+                        false,
+                    );
+                    multicall.add_call(
+                        market
+                            .contract(Arc::clone(&self.client))
+                            .earnings_accumulator(),
+                        false,
+                    );
+                    multicall.add_call(
+                        market
+                            .contract(Arc::clone(&self.client))
+                            .earnings_accumulator_smooth_factor(),
+                        false,
+                    );
+                    multicall.add_call(
+                        market.contract(Arc::clone(&self.client)).floating_debt(),
+                        false,
+                    );
+                    multicall.add_call(
+                        market
+                            .contract(Arc::clone(&self.client))
+                            .total_floating_borrow_shares(),
+                        false,
+                    );
+                    multicall.add_call(
+                        market
+                            .contract(Arc::clone(&self.client))
+                            .last_floating_debt_update(),
+                        false,
+                    );
+                    multicall.add_call(
+                        market
+                            .contract(Arc::clone(&self.client))
+                            .floating_utilization(),
+                        false,
+                    );
+                    multicall.add_call(
+                        market.contract(Arc::clone(&self.client)).total_supply(),
+                        false,
+                    );
                 }
                 let responses = multicall
                     .version(MulticallVersion::Multicall)
                     .block(block)
                     .call_raw()
                     .await?;
-                for (i, market) in self.markets.values().enumerate() {
-                    let previewer_market = &previewer_account[&market.contract.address()];
+                for (i, market) in self.data.markets.values().enumerate() {
+                    let previewer_market =
+                        &previewer_account[&market.contract(Arc::clone(&self.client)).address()];
 
                     success &= compare!(
                         "floating_assets",
@@ -1684,23 +1809,26 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             compare_markets = false;
             let mut debt = U256::zero();
             for market_account in previewer_account.values() {
-                let account = &self.accounts[address].positions[&market_account.market];
-                // let market = &self.markets[&market_account.market];
+                let account = &self.data.accounts[address].positions[&market_account.market];
                 success &= compare!(
                     "floating_deposit_assets",
                     address,
                     market_account.market,
                     market_account.floating_deposit_assets,
-                    account
-                        .floating_deposit_assets(&self.markets[&market_account.market], timestamp)
+                    account.floating_deposit_assets::<M, S>(
+                        &self.data.markets[&market_account.market],
+                        timestamp
+                    )
                 );
                 success &= compare!(
                     "floating_borrow_assets",
                     address,
                     market_account.market,
                     market_account.floating_borrow_assets,
-                    account
-                        .floating_borrow_assets(&self.markets[&market_account.market], timestamp)
+                    account.floating_borrow_assets::<M, S>(
+                        &self.data.markets[&market_account.market],
+                        timestamp
+                    )
                 );
                 success &= compare!(
                     "floating_deposit_shares",
@@ -1760,7 +1888,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             "",
             "",
             previewer_incentive.0,
-            self.liquidation_incentive.liquidator
+            self.data.liquidation_incentive.liquidator
         );
 
         success &= compare!(
@@ -1768,7 +1896,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             "",
             "",
             previewer_incentive.1,
-            self.liquidation_incentive.lenders
+            self.data.liquidation_incentive.lenders
         );
 
         let mut multicall =
@@ -1799,9 +1927,9 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             if adjusted_debt > U256::zero() {
                 let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
                 info!("health factor      : {}", previewer_hf);
-                if let Some(account) = self.accounts.get(&account) {
+                if let Some(account) = self.data.accounts.get(&account) {
                     if let Ok((hf, collateral, debt, _)) =
-                        Self::compute_hf(&self.markets, account, timestamp)
+                        Self::compute_hf(&self.data.markets, account, timestamp)
                     {
                         success &= compare!("health_factor", &account, "", previewer_hf, hf);
                         success &=
@@ -1812,6 +1940,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             }
         }
         if !success {
+            let _ = cacache::remove(CACHE_PATH, CACHE_PROTOCOL).await;
             panic!("compare accounts error");
         }
         Ok(())
@@ -1869,7 +1998,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
     }
 
     fn compute_hf(
-        markets: &HashMap<Address, Market<M, S>>,
+        markets: &HashMap<Address, Market>,
         account: &Account,
         timestamp: U256,
     ) -> Result<(U256, U256, U256, Repay)> {
@@ -1881,7 +2010,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         for (market_address, position) in account.positions.iter() {
             let market = markets.get(market_address).unwrap();
             if position.is_collateral {
-                let current_collateral = position.floating_deposit_assets(market, timestamp);
+                let current_collateral =
+                    position.floating_deposit_assets::<M, S>(market, timestamp);
                 let value = current_collateral
                     .mul_div_down(market.price, U256::exp10(market.decimals as usize));
                 total_collateral += value;
@@ -1900,7 +2030,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         borrowed.mul_wad_down((timestamp - *maturity) * market.penalty_rate)
                 }
             }
-            current_debt += position.floating_borrow_assets(market, timestamp);
+            current_debt += position.floating_borrow_assets::<M, S>(market, timestamp);
 
             let value =
                 current_debt.mul_div_up(market.price, U256::exp10(market.decimals as usize));
@@ -1977,4 +2107,31 @@ fn sentry_breadcrumb(meta: &LogMeta, topics: Vec<H256>, log_data: Vec<u8>, event
         data,
         ..Default::default()
     });
+}
+
+pub mod hashmap_as_vector {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::iter::FromIterator;
+
+    pub fn serialize<'a, T, K, V, S>(target: T, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: IntoIterator<Item = (&'a K, &'a V)>,
+        K: Serialize + 'a,
+        V: Serialize + 'a,
+    {
+        let container: Vec<_> = target.into_iter().collect();
+        serde::Serialize::serialize(&container, ser)
+    }
+
+    pub fn deserialize<'de, T, K, V, D>(des: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: FromIterator<(K, V)>,
+        K: Deserialize<'de>,
+        V: Deserialize<'de>,
+    {
+        let container: Vec<_> = serde::Deserialize::deserialize(des)?;
+        Ok(T::from_iter(container.into_iter()))
+    }
 }
