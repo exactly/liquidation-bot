@@ -30,6 +30,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
@@ -109,25 +110,35 @@ struct ProtocolData {
 }
 
 impl ProtocolData {
+    fn cache_path(chain_id: u64) -> String {
+        [CACHE_PATH, chain_id.to_string().as_str()]
+            .iter()
+            .collect::<PathBuf>()
+            .to_str()
+            .unwrap_or(CACHE_PATH)
+            .to_string()
+    }
+
     pub async fn from_cache_or_new<M: 'static + Middleware, S: 'static + Signer>(
         auditor: &Auditor<SignerMiddleware<M, S>>,
         deployed_block: u64,
         market_weth_address: Address,
         config: &Config,
     ) -> Result<ProtocolData> {
-        let protocol_data = match cacache::read(CACHE_PATH, CACHE_PROTOCOL).await {
-            Ok(cache) => {
-                if let Ok(protocol_data) = serde_json::from_slice::<ProtocolData>(&cache) {
-                    protocol_data
-                } else {
+        let protocol_data =
+            match cacache::read(ProtocolData::cache_path(config.chain_id), CACHE_PROTOCOL).await {
+                Ok(cache) => {
+                    if let Ok(protocol_data) = serde_json::from_slice::<ProtocolData>(&cache) {
+                        protocol_data
+                    } else {
+                        Self::new(auditor, deployed_block, config, market_weth_address).await?
+                    }
+                }
+                Err(e) => {
+                    println!("Failed to load protocol data from cache: {}", e);
                     Self::new(auditor, deployed_block, config, market_weth_address).await?
                 }
-            }
-            Err(e) => {
-                println!("Failed to load protocol data from cache: {}", e);
-                Self::new(auditor, deployed_block, config, market_weth_address).await?
-            }
-        };
+            };
         Ok(protocol_data)
     }
     async fn new<M: 'static + Middleware, S: 'static + Signer>(
@@ -177,6 +188,7 @@ pub struct Protocol<M, W, S> {
     token_pairs: Arc<TokenPairFeeMap>,
     tokens: Arc<HashSet<Address>>,
     data: ProtocolData,
+    chain_id: u64,
 }
 
 impl<
@@ -269,6 +281,7 @@ impl<
             tokens,
             token_pairs,
             data,
+            chain_id: config.chain_id,
         })
     }
 
@@ -406,9 +419,13 @@ impl<
                             .await
                             .unwrap();
                         let backup = serde_json::to_vec(&me.data).unwrap();
-                        cacache::write(CACHE_PATH, CACHE_PROTOCOL, &backup)
-                            .await
-                            .unwrap();
+                        cacache::write(
+                            ProtocolData::cache_path(me.chain_id),
+                            CACHE_PROTOCOL,
+                            &backup,
+                        )
+                        .await
+                        .unwrap();
                     } else {
                         first_block = last_block + 1u64;
                         last_block = if first_block + PAGE_SIZE > latest_block {
@@ -433,9 +450,13 @@ impl<
                                             continue 'filter;
                                         } else {
                                             let backup = serde_json::to_vec(&me.data).unwrap();
-                                            cacache::write(CACHE_PATH, CACHE_PROTOCOL, &backup)
-                                                .await
-                                                .unwrap();
+                                            cacache::write(
+                                                ProtocolData::cache_path(me.chain_id),
+                                                CACHE_PROTOCOL,
+                                                &backup,
+                                            )
+                                            .await
+                                            .unwrap();
                                         }
                                     }
                                     Err(e) => {
@@ -1583,7 +1604,7 @@ impl<
             }
         }
         if !success {
-            let _ = cacache::remove(CACHE_PATH, CACHE_PROTOCOL).await;
+            let _ = cacache::remove(ProtocolData::cache_path(self.chain_id), CACHE_PROTOCOL).await;
             panic!("compare accounts error");
         }
         Ok(())
@@ -1935,7 +1956,7 @@ impl<
             }
         }
         if !success {
-            let _ = cacache::remove(CACHE_PATH, CACHE_PROTOCOL).await;
+            let _ = cacache::remove(ProtocolData::cache_path(self.chain_id), CACHE_PROTOCOL).await;
             panic!("compare accounts error");
         }
         Ok(())
