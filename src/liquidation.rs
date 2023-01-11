@@ -80,7 +80,12 @@ pub struct Liquidation<M, W, S> {
     repay_offset: U256,
 }
 
-impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Liquidation<M, W, S> {
+impl<
+        M: 'static + Middleware + Clone,
+        W: 'static + Middleware + Clone,
+        S: 'static + Signer + Clone,
+    > Liquidation<M, W, S>
+{
     pub fn new(
         client: Arc<SignerMiddleware<M, S>>,
         client_relay: Arc<SignerMiddleware<W, S>>,
