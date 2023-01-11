@@ -43,7 +43,7 @@ use tokio_stream::StreamExt;
 use crate::generate_abi::MarketAccount;
 
 #[cfg(feature = "liquidation-stats")]
-use crate::protocol::LiquidateFilter;
+use crate::generate_abi::LiquidateFilter;
 
 const DEFAULT_GAS_PRICE: U256 = math::make_u256(10_000u64);
 pub const BASE_FEED: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
@@ -1301,35 +1301,37 @@ impl<
         use futures::TryFutureExt;
         use std::io::Write;
 
+        use crate::generate_abi::MarketAccount;
+
         let mut previous_multicall = self.multicall.clone();
         previous_multicall.clear_calls();
-        previous_multicall.add_call(self.auditor.account_liquidity(
-            data.borrower,
-            Address::zero(),
-            U256::zero(),
-        ));
-        previous_multicall.add_call(self.auditor.liquidation_incentive());
-        previous_multicall.add_call(self.previewer.exactly(data.borrower));
+        previous_multicall.add_call(
+            self.auditor
+                .account_liquidity(data.borrower, Address::zero(), U256::zero()),
+            true,
+        );
+        previous_multicall.add_call(self.auditor.liquidation_incentive(), true);
+        previous_multicall.add_call(self.previewer.exactly(data.borrower), true);
         let previous_multicall = previous_multicall
             .version(MulticallVersion::Multicall)
             .block(meta.block_number - 1u64);
 
         let mut current_multicall = self.multicall.clone();
         current_multicall.clear_calls();
-        current_multicall.add_call(self.auditor.account_liquidity(
-            data.borrower,
-            Address::zero(),
-            U256::zero(),
-        ));
-        current_multicall.add_call(self.auditor.liquidation_incentive());
+        current_multicall.add_call(
+            self.auditor
+                .account_liquidity(data.borrower, Address::zero(), U256::zero()),
+            true,
+        );
+        current_multicall.add_call(self.auditor.liquidation_incentive(), true);
         let current_multicall = current_multicall
             .version(MulticallVersion::Multicall)
             .block(meta.block_number);
 
         let mut price_multicall = self.multicall.clone();
         price_multicall.clear_calls();
-        for market in self.markets.keys() {
-            price_multicall.add_call(self.oracle.asset_price(*market));
+        for market in self.data.markets.keys() {
+            price_multicall.add_call(self.auditor.asset_price(*market), true);
         }
         let price_multicall = price_multicall
             .version(MulticallVersion::Multicall)
@@ -1342,11 +1344,11 @@ impl<
             self.client
                 .provider()
                 .get_block(meta.block_number)
-                .map_err(|_| ethers::prelude::ContractError::ConstructorError),
+                .map_err(|_| ethers::prelude::MulticallError::IllegalRevert),
             self.client
                 .provider()
                 .get_transaction_receipt(meta.transaction_hash)
-                .map_err(|_| ethers::prelude::ContractError::ConstructorError),
+                .map_err(|_| ethers::prelude::MulticallError::IllegalRevert),
         );
         let (previous, current, prices, current_block_data, receipt): (
             _,
@@ -1368,9 +1370,10 @@ impl<
             * receipt
                 .effective_gas_price
                 .unwrap()
-                .mul_wad_down(self.markets[&self.market_weth_address].oracle_price);
+                .mul_wad_down(self.data.markets[&self.data.market_weth_address].price);
 
         let market_prices: HashMap<Address, U256> = self
+            .data
             .markets
             .keys()
             .zip(prices)
@@ -1441,11 +1444,14 @@ impl<
             liquidator: previous_liquidator,
             lenders: previous_lenders,
         };
-        let (_, _, _, repay) =
-            Self::compute_hf(&self.markets, &self.accounts[&data.borrower], timestamp)?;
+        let (_, _, _, repay) = Self::compute_hf(
+            &self.data.markets,
+            &self.data.accounts[&data.borrower],
+            timestamp,
+        )?;
 
         let close_factor =
-            Liquidation::<M, S>::calculate_close_factor(&repay, &previous_liquidation_incentive);
+            Liquidation::<M, W, S>::calculate_close_factor(&repay, &previous_liquidation_incentive);
         let current_hf = if current_adjusted_debt > U256::zero() {
             current_adjusted_collateral.div_wad_down(current_adjusted_debt)
         } else {
