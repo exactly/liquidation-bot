@@ -29,6 +29,33 @@ impl Default for Config {
             .parse::<u64>()
             .expect("CHAIN_ID is not number");
 
+        let (chain_id_name, rpc_provider, rpc_provider_relayer) = match chain_id {
+            1 => {
+                dotenv::from_filename(".env.mainnet").ok();
+                (
+                    "mainnet",
+                    get_env_or_throw("MAINNET_NODE"),
+                    get_env_or_throw("MAINNET_NODE_RELAYER"),
+                )
+            }
+            5 => {
+                dotenv::from_filename(".env.goerli").ok();
+                (
+                    "goerli",
+                    get_env_or_throw("GOERLI_NODE"),
+                    get_env_or_throw("GOERLI_NODE_RELAYER"),
+                )
+            }
+            1337 => (
+                "fork",
+                get_env_or_throw("FORK_NODE"),
+                get_env_or_throw("FORK_NODE_RELAYER"),
+            ),
+            _ => {
+                panic!("Unknown network!")
+            }
+        };
+
         let wallet = MnemonicBuilder::<English>::default()
             .phrase(env::var("MNEMONIC").unwrap().as_str())
             .build()
@@ -43,27 +70,6 @@ impl Default for Config {
             .unwrap_or_else(|_| "0".into())
             .parse::<u32>()
             .unwrap_or(0);
-
-        let (chain_id_name, rpc_provider, rpc_provider_relayer) = match chain_id {
-            1 => (
-                "mainnet",
-                get_env_or_throw("MAINNET_NODE"),
-                get_env_or_throw("MAINNET_NODE_RELAYER"),
-            ),
-            5 => (
-                "goerli",
-                get_env_or_throw("GOERLI_NODE"),
-                get_env_or_throw("GOERLI_NODE_RELAYER"),
-            ),
-            1337 => (
-                "fork",
-                get_env_or_throw("FORK_NODE"),
-                get_env_or_throw("FORK_NODE_RELAYER"),
-            ),
-            _ => {
-                panic!("Unknown network!")
-            }
-        };
 
         let token_pairs = env::var("TOKEN_PAIRS").unwrap_or_else(|_| "".into());
 
