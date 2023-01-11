@@ -173,20 +173,29 @@ pub struct Protocol<M, W, S> {
     auditor: Auditor<SignerMiddleware<M, S>>,
     liquidation: Arc<Mutex<Liquidation<M, W, S>>>,
     liquidation_sender: Sender<LiquidationData>,
+    multicall: Multicall<SignerMiddleware<M, S>>,
     token_pairs: Arc<TokenPairFeeMap>,
     tokens: Arc<HashSet<Address>>,
     data: ProtocolData,
 }
 
-impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> std::fmt::Debug
-    for Protocol<M, W, S>
+impl<
+        M: 'static + Middleware + Clone,
+        W: 'static + Middleware + Clone,
+        S: 'static + Signer + Clone,
+    > std::fmt::Debug for Protocol<M, W, S>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Protocol").finish()
     }
 }
 
-impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Protocol<M, W, S> {
+impl<
+        M: 'static + Middleware + Clone,
+        W: 'static + Middleware + Clone,
+        S: 'static + Signer + Clone,
+    > Protocol<M, W, S>
+{
     async fn get_contracts(
         client: Arc<SignerMiddleware<M, S>>,
         config: &Config,
@@ -248,6 +257,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         let data =
             ProtocolData::from_cache_or_new(&auditor, deployed_block, market_weth_address, config)
                 .await?;
+        let multicall = Multicall::new(Arc::clone(&client), None).await?;
 
         Ok(Protocol {
             client: Arc::clone(&client),
@@ -255,6 +265,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             previewer,
             liquidation,
             liquidation_sender,
+            multicall,
             tokens,
             token_pairs,
             data,
@@ -497,11 +508,11 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 )
             })
             .collect();
-        let mut multicall =
-            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
         if price_feed.is_empty() {
             return Ok(());
         }
+        let mut multicall = self.multicall.clone();
+        multicall.clear_calls();
         price_feed.iter().for_each(|price_feed_wrapper| {
             multicall.add_call(price_feed_wrapper.latest_answer(), false);
         });
@@ -539,11 +550,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                             PriceFeed::new(wrapper.price_feed_one, self.client.clone());
                         let price_feed_two =
                             PriceFeed::new(wrapper.price_feed_two, self.client.clone());
-                        let mut multicall = Multicall::<SignerMiddleware<M, S>>::new(
-                            Arc::clone(&self.client),
-                            None,
-                        )
-                        .await?;
+                        let mut multicall = self.multicall.clone();
+                        multicall.clear_calls();
                         multicall.add_call(price_feed_one.latest_answer(), false);
                         multicall.add_call(price_feed_two.latest_answer(), false);
                         let results: (U256, U256) = multicall
@@ -637,10 +645,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 market.smart_pool_fee_rate = self.data.sp_fee_rate;
                 market.listed = true;
                 let contract = market.contract(Arc::clone(&self.client));
-                let mut multicall =
-                    Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
-                        .await
-                        .unwrap();
+                let mut multicall = self.multicall.clone();
+                multicall.clear_calls();
                 multicall.add_call(contract.max_future_pools(), false);
                 multicall.add_call(contract.earnings_accumulator_smooth_factor(), false);
                 multicall.add_call(contract.interest_rate_model(), false);
@@ -677,11 +683,10 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 multicall.add_call(irm.floating_curve_a(), false);
                 multicall.add_call(irm.floating_curve_b(), false);
                 multicall.add_call(irm.floating_max_utilization(), false);
-                let result = multicall
+                multicall = multicall
                     .version(MulticallVersion::Multicall)
-                    .block(meta.block_number)
-                    .call()
-                    .await;
+                    .block(meta.block_number);
+                let result = multicall.call().await;
                 if let Ok((floating_a, floating_b, floating_max_utilization)) = result {
                     market.floating_a = floating_a;
                     market.floating_b = floating_b;
@@ -709,19 +714,15 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 market.interest_rate_model = data.interest_rate_model;
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
-                let mut multicall =
-                    Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
-                        .await
-                        .unwrap();
-
+                let mut multicall = self.multicall.clone();
+                multicall.clear_calls();
                 multicall.add_call(irm.floating_curve_a(), false);
                 multicall.add_call(irm.floating_curve_b(), false);
                 multicall.add_call(irm.floating_max_utilization(), false);
-                let result = multicall
+                multicall = multicall
                     .version(MulticallVersion::Multicall)
-                    .block(meta.block_number)
-                    .call()
-                    .await;
+                    .block(meta.block_number);
+                let result = multicall.call().await;
                 if let Ok((floating_a, floating_b, floating_max_utilization)) = result {
                     market.floating_a = floating_a;
                     market.floating_b = floating_b;
@@ -1035,14 +1036,14 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
         let wrapper = PriceFeedWrapper::new(data.price_feed, Arc::clone(&self.client));
         let double = PriceFeedDouble::new(data.price_feed, Arc::clone(&self.client));
-        let mut wrapper_single_multicall =
-            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        let mut wrapper_single_multicall = self.multicall.clone();
+        wrapper_single_multicall.clear_calls();
         wrapper_single_multicall.add_call(wrapper.main_price_feed(), true);
         wrapper_single_multicall.add_call(wrapper.wrapper(), true);
         wrapper_single_multicall.add_call(wrapper.conversion_selector(), true);
         wrapper_single_multicall.add_call(wrapper.base_unit(), true);
-        let mut wrapper_double_multicall =
-            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        let mut wrapper_double_multicall = self.multicall.clone();
+        wrapper_double_multicall.clear_calls();
         wrapper_double_multicall.add_call(double.price_feed_one(), true);
         wrapper_double_multicall.add_call(double.price_feed_two(), true);
         wrapper_double_multicall.add_call(double.base_unit(), true);
@@ -1098,8 +1099,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         } else {
             vec![data.price_feed]
         };
-        let mut aggregator_multicall =
-            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        let mut aggregator_multicall = self.multicall.clone();
+        aggregator_multicall.clear_calls();
         for p in &price_feed_address {
             aggregator_multicall.add_call(
                 AggregatorProxy::new(*p, Arc::clone(&self.client)).aggregator(),
@@ -1275,12 +1276,12 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         data: &LiquidateFilter,
         writer: &mut BufWriter<File>,
     ) -> Result<()> {
-        use ethers::types::{Block, TransactionReceipt, H256};
+        use ethers::types::{Block, TransactionReceipt};
         use futures::TryFutureExt;
-        use std::{collections::BTreeMap, io::Write};
+        use std::io::Write;
 
-        let mut previous_multicall =
-            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        let mut previous_multicall = self.multicall.clone();
+        previous_multicall.clear_calls();
         previous_multicall.add_call(self.auditor.account_liquidity(
             data.borrower,
             Address::zero(),
@@ -1292,8 +1293,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             .version(MulticallVersion::Multicall)
             .block(meta.block_number - 1u64);
 
-        let mut current_multicall =
-            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        let mut current_multicall = self.multicall.clone();
+        current_multicall.clear_calls();
         current_multicall.add_call(self.auditor.account_liquidity(
             data.borrower,
             Address::zero(),
@@ -1304,8 +1305,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             .version(MulticallVersion::Multicall)
             .block(meta.block_number);
 
-        let mut price_multicall =
-            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        let mut price_multicall = self.multicall.clone();
+        price_multicall.clear_calls();
         for market in self.markets.keys() {
             price_multicall.add_call(self.oracle.asset_price(*market));
         }
@@ -1473,10 +1474,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
         let mut positions = HashMap::<Address, HashMap<Address, MarketAccount>>::new();
 
         while skip < self.data.accounts.len() {
-            let mut multicall =
-                Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
-                    .await
-                    .unwrap();
+            let mut multicall = self.multicall.clone();
+            multicall.clear_calls();
             let mut inputs: Vec<Address> = Vec::new();
             for account in self.data.accounts.keys().skip(skip).take(batch) {
                 inputs.push(*account);
@@ -1519,9 +1518,7 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
 
         let mut multicall_pool = Vec::new();
         for _ in 0..(self.data.accounts.len() - 1 + batch) / batch {
-            multicall_pool.push(
-                Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?,
-            );
+            multicall_pool.push(self.multicall.clone());
         }
         self.data
             .accounts
@@ -1614,9 +1611,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                 account.positions.len()
             );
             if compare_markets {
-                let mut multicall =
-                    Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
-                        .await?;
+                let mut multicall = self.multicall.clone();
+                multicall.clear_calls();
                 for market in self.data.markets.values() {
                     if market.price_feed.is_some() && !market.base_market {
                         multicall.add_call(
@@ -1650,9 +1646,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
                         );
                     });
 
-                let mut multicall =
-                    Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
-                        .await?;
+                let mut multicall = self.multicall.clone();
+                multicall.clear_calls();
                 const FIELDS: usize = 9;
                 for market in self.data.markets.values() {
                     multicall.add_call(
@@ -1899,8 +1894,8 @@ impl<M: 'static + Middleware, W: 'static + Middleware, S: 'static + Signer> Prot
             self.data.liquidation_incentive.lenders
         );
 
-        let mut multicall =
-            Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None).await?;
+        let mut multicall = self.multicall.clone();
+        multicall.clear_calls();
         for account in &accounts_with_borrows {
             multicall.add_call(
                 self.auditor
