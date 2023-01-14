@@ -481,7 +481,12 @@ impl<
         // if error {
         //     return Err(Arc::try_unwrap(service).unwrap().into_inner());
         // }
-        Ok(Arc::try_unwrap(service).unwrap().into_inner())
+        let protocol = Arc::try_unwrap(service);
+        if let Ok(protocol) = protocol {
+            Ok(protocol.into_inner())
+        } else {
+            panic!("Thread panic!");
+        }
     }
 
     async fn update_price_lido(
