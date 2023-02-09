@@ -189,50 +189,26 @@ impl Market {
         }
     }
 
-    fn floating_borrow_rate(&self, utilization_before: U256, utilization_after: U256) -> U256 {
-        let precision_threshold: U256 = U256::exp10(13) * 75u8; // 7.5e14
-
-        let alpha = self.floating_max_utilization - utilization_before;
-        let delta = utilization_after - utilization_before;
-        let r = if delta.div_wad_down(alpha) < precision_threshold {
-            I256::from_raw(
-                (self.floating_a.div_wad_down(alpha)
-                    + self.floating_a.mul_div_down(
-                        U256::exp10(18) * 4u8,
-                        self.floating_max_utilization
-                            - ((utilization_after + utilization_before) / 2u8),
-                    )
-                    + self
-                        .floating_a
-                        .div_wad_down(self.floating_max_utilization - utilization_after))
-                    / 6u8,
-            )
-        } else {
-            self.floating_a.mul_div_down(
-                alpha
-                    .div_wad_down(self.floating_max_utilization - utilization_after)
-                    .ln_wad(),
-                I256::from_raw(delta),
-            )
-        } + I256::from(self.floating_b);
-        r.into_raw()
+    fn floating_borrow_rate(&self, utilization: U256) -> U256 {
+        (I256::from_raw(
+            self.floating_a
+                .div_wad_down(self.floating_max_utilization - utilization),
+        ) + I256::from(self.floating_b))
+        .into_raw()
     }
 
     pub fn total_floating_borrow_assets(&self, timestamp: U256) -> U256 {
-        let new_floating_utilization = if self.floating_assets > U256::zero() {
+        let floating_utilization = if self.floating_assets > U256::zero() {
             self.floating_debt.div_wad_up(self.floating_assets)
         } else {
             U256::zero()
         };
         let new_debt = self.floating_debt.mul_wad_down(
-            self.floating_borrow_rate(
-                U256::min(self.floating_utilization, new_floating_utilization),
-                U256::max(self.floating_utilization, new_floating_utilization),
-            )
-            .mul_div_down(
-                timestamp - self.last_floating_debt_update,
-                U256::from(365 * 24 * 60 * 60),
-            ),
+            self.floating_borrow_rate(floating_utilization)
+                .mul_div_down(
+                    timestamp - self.last_floating_debt_update,
+                    U256::from(365 * 24 * 60 * 60),
+                ),
         );
         self.floating_debt + new_debt
     }
