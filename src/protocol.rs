@@ -135,7 +135,7 @@ impl ProtocolData {
                     }
                 }
                 Err(e) => {
-                    println!("Failed to load protocol data from cache: {}", e);
+                    error!("Failed to load protocol data from cache: {}", e);
                     Self::new(auditor, deployed_block, config, market_weth_address).await?
                 }
             };

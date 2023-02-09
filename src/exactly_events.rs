@@ -36,7 +36,6 @@ use ethers::{
     types::H256,
 };
 use log::error;
-use log::warn;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

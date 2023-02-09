@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
             if let Some(service) = credit_service {
                 credit_service = match service.launch().await {
                     Ok(current_service) => {
-                        println!("CREDIT SERVICE ERROR");
+                        info!("CREDIT SERVICE ERROR");
                         Some(current_service)
                     }
                     Err(e) => {
