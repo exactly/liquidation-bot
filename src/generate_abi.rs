@@ -8,7 +8,7 @@ abigen!(
 
 abigen!(
     Previewer,
-    "node_modules/@exactly-protocol/protocol/deployments/goerli/Previewer.json",
+    "node_modules/@exactly-protocol/protocol/deployments/optimism-goerli/Previewer.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
@@ -26,7 +26,7 @@ abigen!(
 
 abigen!(
     InterestRateModel,
-    "node_modules/@exactly-protocol/protocol/deployments/goerli/InterestRateModelWETH.json",
+    "node_modules/@exactly-protocol/protocol/deployments/optimism-goerli/InterestRateModelWETH.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 

@@ -2,9 +2,10 @@ use super::config::Config;
 use super::exactly_events::ExactlyEvents;
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::liquidation::{Liquidation, LiquidationData, Repay};
+use crate::generate_abi::interest_rate_model::InterestRateModel;
 use crate::generate_abi::{
-    AggregatorProxy, Auditor, InterestRateModel, LiquidationIncentive, Previewer, PriceFeed,
-    PriceFeedDouble, PriceFeedLido, PriceFeedWrapper,
+    AggregatorProxy, Auditor, LiquidationIncentive, Previewer, PriceFeed, PriceFeedDouble,
+    PriceFeedLido, PriceFeedWrapper,
 };
 use crate::liquidation::{LiquidationAction, ProtocolState};
 use crate::market::{PriceDouble, PriceFeedController, PriceFeedType, PriceRate};
