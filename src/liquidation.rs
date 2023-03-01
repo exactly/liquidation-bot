@@ -5,7 +5,7 @@ use ethers::prelude::{
     Address, Middleware, Multicall, MulticallVersion, Signer, SignerMiddleware, U256,
 };
 use eyre::Result;
-use log::info;
+use log::{error, info};
 use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -261,6 +261,19 @@ impl<
             info!("waiting receipt");
             let receipt = tx.confirmations(1).await?;
             info!("Liquidation tx {:?}", receipt);
+            let (adjusted_collateral, adjusted_debt): (U256, U256) = self
+                .auditor
+                .account_liquidity(account.address, Address::zero(), U256::zero())
+                .call()
+                .await?;
+            let hf = adjusted_collateral.div_wad_down(adjusted_debt);
+            if hf < math::WAD {
+                info!("hf        : {:#?}", hf);
+                info!("collateral: {:#?}", adjusted_collateral);
+                info!("debt      : {:#?}", adjusted_debt);
+                error!("liquidation failed");
+                return Ok(());
+            }
         }
         info!("done liquidating");
         Ok(())
