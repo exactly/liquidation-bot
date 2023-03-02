@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@chainlink/contracts": "0.5.1",
-    "@exactly-protocol/protocol": "exactly/protocol#1c509e42560e29e0006c0a950a3c41f4f04f3ffd",
+    "@exactly-protocol/protocol": "^0.2.6",
     "@uniswap/v3-core": "1.0.1",
     "@uniswap/v3-periphery": "1.4.3",
     "solmate": "transmissions11/solmate#v7"
