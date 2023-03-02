@@ -558,7 +558,11 @@ impl<
             })
             .zip(results)
         {
-            let value = result.clone().into_int().unwrap();
+            let value = result
+                .clone()
+                .map_err(|_| eyre!("wrong value"))?
+                .into_int()
+                .unwrap();
             let price = if let Some(wrapper_type) =
                 market.price_feed.as_mut().and_then(|p| p.wrapper).as_mut()
             {
@@ -1142,7 +1146,12 @@ impl<
         let event_emitters = if let Ok(event_emitter) = response {
             let mut event_emitters = Vec::new();
             for aggregator in event_emitter {
-                event_emitters.push(aggregator.into_address().unwrap());
+                event_emitters.push(
+                    aggregator
+                        .map_err(|_| eyre!("wrong value"))?
+                        .into_address()
+                        .unwrap(),
+                );
             }
             event_emitters
         } else {
@@ -1582,7 +1591,7 @@ impl<
                 responses.append(&mut task.await.unwrap()?);
             }
             for (token, (address, _)) in responses.iter().zip(&self.data.accounts) {
-                let v = token.clone().into_tokens();
+                let v = token.clone().unwrap().into_tokens();
                 let (adjusted_collateral, adjusted_debt): (U256, U256) = (
                     v[0].clone().into_uint().unwrap(),
                     v[1].clone().into_uint().unwrap(),

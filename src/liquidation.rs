@@ -336,7 +336,7 @@ impl<
                 if state.price_feeds[market] != Address::zero()
                     && state.price_feeds[market] != Address::from_str(protocol::BASE_FEED).unwrap()
                 {
-                    let price = (*market, prices[i].clone().into_uint().unwrap());
+                    let price = (*market, prices[i].clone().unwrap().into_uint().unwrap());
                     i += 1;
                     price
                 } else {
