@@ -46,6 +46,14 @@ impl Default for Config {
                     get_env_or_throw("GOERLI_NODE_RELAYER"),
                 )
             }
+            10 => {
+                dotenv::from_filename(".env.optimism").ok();
+                (
+                    "optimism",
+                    get_env_or_throw("OPTIMISM_NODE"),
+                    get_env_or_throw("OPTIMISM_NODE_RELAYER"),
+                )
+            }
             420 => {
                 dotenv::from_filename(".env.optimism-goerli").ok();
                 (
