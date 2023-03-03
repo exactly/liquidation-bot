@@ -12,6 +12,10 @@ export default {
       url: env.MAINNET_NODE ?? "https://mainnet.infura.io/",
       ...(env.MNEMONIC && { accounts: { mnemonic: env.MNEMONIC } }),
     },
+    optimism: {
+      url: env.OPTIMISM_NODE ?? "https://optimism.infura.io/",
+      ...(env.MNEMONIC && { accounts: { mnemonic: env.MNEMONIC } }),
+    },
     goerli: {
       url: env.GOERLI_NODE ?? "https://goerli.infura.io/",
       ...(env.MNEMONIC && { accounts: { mnemonic: env.MNEMONIC } }),
@@ -27,6 +31,7 @@ export default {
     owner: {
       default: 0,
       mainnet: "0x382d89aa156C473Fdb1c9565dF309e80e8fA4437",
+      optimism: "0x59C41d3629F81ef8Ce554B4eB3446a2b6A129260",
       goerli: "0x1801f5EAeAbA3fD02cBF4b7ED1A7b58AD84C0705",
     },
   },
