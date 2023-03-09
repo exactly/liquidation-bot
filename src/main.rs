@@ -85,6 +85,7 @@ async fn main() -> Result<()> {
                 debug: true,
                 attach_stacktrace: true,
                 default_integrations: true,
+                max_breadcrumbs: 1000,
                 ..Default::default()
             },
         ))

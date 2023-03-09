@@ -82,11 +82,13 @@ struct ContractKey {
 }
 
 macro_rules! compare {
-    ($label:expr, $account:expr, $market:expr, $ref:expr, $val:expr) => {
+    ($label:expr, $account:expr, $market:expr, $ref:expr, $val:expr $(, $( $print:expr$(,)? )?)?) => {
         if $ref != $val {
-            warn!("{:?}@{}.{}", $account, $market, $label);
-            warn!("reference: {:#?}", $ref);
-            warn!("    value: {:#?}", $val);
+            $($( if $print == true {
+                warn!("{:?}@{}.{}", $account, $market, $label);
+                warn!("reference: {:#?}", $ref);
+                warn!("    value: {:#?}", $val);
+            } )? )?
             false
         } else {
             true
@@ -1239,9 +1241,10 @@ impl<
             }
         }
         info!(
-            "accounts to liquidate {} / {}",
+            "accounts to liquidate {} / {} on block {}",
             liquidations.len(),
-            self.data.accounts.len()
+            self.data.accounts.len(),
+            block_number,
         );
         if !liquidations.is_empty() {
             self.liquidation_sender
@@ -1590,7 +1593,8 @@ impl<
             for task in tasks {
                 responses.append(&mut task.await.unwrap()?);
             }
-            for (token, (address, _)) in responses.iter().zip(&self.data.accounts) {
+            for (i, (token, (address, _))) in responses.iter().zip(&self.data.accounts).enumerate()
+            {
                 let v = token.clone().unwrap().into_tokens();
                 let (adjusted_collateral, adjusted_debt): (U256, U256) = (
                     v[0].clone().into_uint().unwrap(),
@@ -1601,16 +1605,24 @@ impl<
                     if let Some(account) = self.data.accounts.get(address) {
                         let hf = Self::compute_hf(&self.data.markets, account, timestamp).map(
                             |(hf, collateral, debt, _)| {
-                                success &=
-                                    compare!("health_factor", &account, "", previewer_hf, hf);
+                                let print = i == 0;
+                                success &= compare!(
+                                    "health_factor",
+                                    &account,
+                                    "",
+                                    previewer_hf,
+                                    hf,
+                                    print,
+                                );
                                 success &= compare!(
                                     "collateral",
                                     &account,
                                     "",
                                     adjusted_collateral,
-                                    collateral
+                                    collateral,
                                 );
-                                success &= compare!("debt", &account, "", adjusted_debt, debt);
+                                success &=
+                                    compare!("debt", &account, "", adjusted_debt, debt, print);
                                 hf
                             },
                         );
@@ -1626,6 +1638,19 @@ impl<
         }
         if !success {
             let _ = cacache::remove(ProtocolData::cache_path(self.chain_id), CACHE_PROTOCOL).await;
+            let mut data = BTreeMap::new();
+            data.insert("block".to_string(), Value::Number(block.as_u64().into()));
+            data.insert(
+                "timestamp".to_string(),
+                Value::String(String::from(timestamp.to_string())),
+            );
+            add_breadcrumb(Breadcrumb {
+                ty: "error".to_string(),
+                category: Some("compare".to_string()),
+                level: Level::Error,
+                data,
+                ..Default::default()
+            });
             panic!("compare accounts error");
         }
         Ok(())
