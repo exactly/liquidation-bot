@@ -3,7 +3,10 @@ import "hardhat-deploy";
 import "@typechain/hardhat";
 import "@nomiclabs/hardhat-ethers";
 import { env } from "process";
+import { setup } from "@tenderly/hardhat-tenderly";
 import type { HardhatUserConfig } from "hardhat/types";
+
+setup({ automaticVerifications: true });
 
 export default {
   solidity: { version: "0.8.17", settings: { optimizer: { enabled: true, runs: 6_666_666 } } },
@@ -31,4 +34,5 @@ export default {
       goerli: "0x1801f5EAeAbA3fD02cBF4b7ED1A7b58AD84C0705",
     },
   },
+  tenderly: { project: "exactly", username: "exactly", privateVerification: true },
 } as HardhatUserConfig;
