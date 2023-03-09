@@ -1,0 +1,22 @@
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'environment to deploy'
+        required: true
+        type: environment
+jobs:
+  deploy:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_TAG: ${{ format('gcr.io/exactly-liq-bot/liquidation-bot:{0}', github.sha) }}
+    steps:
+      - uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+      - uses: google-github-actions/get-gke-credentials@v1
+        with:
+          cluster_name: liquidation-bot
+          location: us-central1
+      - run: kubectl set image deployment/${{ inputs.environment }} liquidation-bot=${{ env.IMAGE_TAG }}
