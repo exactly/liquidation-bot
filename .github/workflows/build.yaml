@@ -10,7 +10,7 @@ jobs:
     env:
       DOCKER_BUILDKIT: 1
       PROJECT_ID: exactly-liq-bot
-      IMAGE_TAG: ${{ format('gcr.io/exactly-liq-bot/liquidation-bot:{0}', github.sha) }}
+      IMAGE_TAG: ${{ format('gcr.io/exactly-liq-bot/liquidation-bot:{0}', github.event.pull_request.head.sha || github.sha) }}
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
