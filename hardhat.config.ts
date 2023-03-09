@@ -20,10 +20,6 @@ export default {
       url: env.GOERLI_NODE ?? "https://goerli.infura.io/",
       ...(env.MNEMONIC && { accounts: { mnemonic: env.MNEMONIC } }),
     },
-    "optimism-goerli": {
-      url: env.OPTIMISM_GOERLI_NODE ?? "https://optimism-goerli.infura.io/",
-      ...(env.MNEMONIC && { accounts: { mnemonic: env.MNEMONIC } }),
-    },
   },
   typechain: { outDir: "types" },
   namedAccounts: {

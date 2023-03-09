@@ -54,14 +54,6 @@ impl Default for Config {
                     get_env_or_throw("OPTIMISM_NODE_RELAYER"),
                 )
             }
-            420 => {
-                dotenv::from_filename(".env.optimism-goerli").ok();
-                (
-                    "optimism-goerli",
-                    get_env_or_throw("OPTIMISM_GOERLI_NODE"),
-                    get_env_or_throw("OPTIMISM_GOERLI_NODE_RELAYER"),
-                )
-            }
             1337 => (
                 "fork",
                 get_env_or_throw("FORK_NODE"),
