@@ -1,0 +1,33 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: 1
+      PROJECT_ID: exactly-liq-bot
+      IMAGE_TAG: ${{ format('gcr.io/exactly-liq-bot/liquidation-bot:{0}', github.sha) }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          cache: npm
+      - run: npm ci --omit=dev --legacy-peer-deps
+      - run: docker build -t ${{ env.IMAGE_TAG }} .
+      - uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+      - uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - run: gcloud auth configure-docker
+      - run: docker push ${{ env.IMAGE_TAG }}
+      - uses: google-github-actions/get-gke-credentials@v1
+        with:
+          cluster_name: liquidation-bot
+          project_id: ${{ env.PROJECT_ID }}
+          location: us-central1
