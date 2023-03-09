@@ -1987,29 +1987,21 @@ impl<
         let file = File::open(abi_path).unwrap();
         let reader = BufReader::new(file);
         let contract: Value = serde_json::from_reader(reader).unwrap();
-        let (contract, abi, receipt): (Value, Value, Value) = if let Value::Object(abi) = contract {
-            (
-                abi["address"].clone(),
-                abi["abi"].clone(),
-                if let Some(receipt) = abi.get("receipt") {
-                    receipt.clone()
-                } else {
-                    Value::Null
-                },
-            )
-        } else {
-            panic!("Invalid ABI")
+        let Value::Object(deployment) = contract else {
+            panic!("Invalid ABI");
         };
-        let contract: Address = if let Value::String(contract) = contract {
-            Address::from_str(&contract).unwrap()
-        } else {
-            panic!("Invalid ABI")
+        let (Some(contract), Some(abi)) = (
+            deployment.get("address"),
+            deployment.get("abi")
+        ) else {
+            panic!("Invalid ABI");
         };
-        let abi: Vec<Value> = if let Value::Array(abi) = abi {
-            abi
-        } else {
-            panic!("Invalid ABI")
+        let (contract, abi) = (contract.clone(), abi.clone());
+        let receipt = deployment.get("receipt").unwrap_or(&Value::Null).clone();
+        let (Value::String(contract), Value::Array(abi)) = (contract, abi) else {
+            panic!("Invalid ABI");
         };
+        let contract = Address::from_str(&contract).unwrap();
         let abi: Vec<Value> = abi
             .into_iter()
             .filter(|abi| {
