@@ -1291,18 +1291,23 @@ impl<
         let hf = Self::compute_hf(&self.data.markets, account, to_timestamp);
         if let Ok((hf, _, _, repay)) = hf {
             if hf < math::WAD && repay.total_adjusted_debt != U256::zero() {
-                if let Some((profitable, _, _, _, _)) = Liquidation::<M, W, S>::is_profitable(
+                let repay_settings = Liquidation::<M, W, S>::get_liquidation_settings(
                     &repay,
                     &self.data.liquidation_incentive,
-                    *last_gas_price,
-                    self.data.markets[&self.data.market_weth_address].price,
+                    self.data.repay_offset,
                     &self.token_pairs,
                     &self.tokens,
-                    self.data.repay_offset,
+                );
+
+                if Liquidation::<M, W, S>::is_profitable(
+                    &repay,
+                    &repay_settings,
+                    &self.data.liquidation_incentive,
+                    *last_gas_price,
+                    U256::from(500_000u128),
+                    self.data.markets[&self.data.market_weth_address].price,
                 ) {
-                    if profitable {
-                        liquidations.insert(*address, (account.clone(), repay));
-                    }
+                    liquidations.insert(*address, (account.clone(), repay));
                 }
             }
         }

@@ -2,13 +2,15 @@ use super::config::Config;
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::protocol::TokenPairFeeMap;
 use ethers::prelude::{
-    Address, Middleware, Multicall, MulticallVersion, Signer, SignerMiddleware, U256,
+    Address, ContractError, Middleware, Multicall, MulticallVersion, Signer, SignerMiddleware, U256,
 };
 use eyre::Result;
 use log::{error, info};
+use sentry::{Breadcrumb, Level};
 use serde::Deserialize;
+use serde_json::Value;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -22,6 +24,14 @@ use super::{
     Account,
 };
 use crate::generate_abi::{Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer};
+
+#[derive(Default, Debug)]
+pub struct RepaySettings {
+    pub max_repay: U256,
+    pub pool_pair: Address,
+    pub pair_fee: u32,
+    pub fee: u32,
+}
 
 #[derive(Default, Debug)]
 pub struct Repay {
@@ -216,16 +226,23 @@ impl<
         if let Some(address) = &repay.market_to_repay {
             let response = self.is_profitable_async(account.address, state).await;
 
-            let (profitable, max_repay, pool_pair, pair_fee, fee) = match response {
+            let (profitable, repay_settings, gas_cost, will_revert) = match response {
                 Some(response) => response,
                 None => return Ok(()),
             };
+            if will_revert {
+                gen_liq_breadcrumb(account, repay, &repay_settings);
+                error!("Liquidation would revert - not sent");
+                return Ok(());
+            }
 
             if !profitable && !self.liquidate_unprofitable {
                 info!("not profitable to liquidate");
                 info!(
                     "repay$: {:?}",
-                    max_repay.mul_div_up(repay.price, U256::exp10(repay.decimals as usize))
+                    repay_settings
+                        .max_repay
+                        .mul_div_up(repay.price, U256::exp10(repay.decimals as usize))
                 );
                 return Ok(());
             }
@@ -240,20 +257,24 @@ impl<
                 repay.market_to_seize.unwrap_or(Address::zero())
             );
             info!("borrower  : {:#?}", account.address);
-            info!("max_repay : {:#?}", max_repay);
-            info!("pool_pair : {:#?}", pool_pair);
-            info!("pair_fee  : {:#?}", pair_fee);
-            info!("fee       : {:#?}", fee);
+            info!("max_repay : {:#?}", repay_settings.max_repay);
+            info!("pool_pair : {:#?}", repay_settings.pool_pair);
+            info!("pair_fee  : {:#?}", repay_settings.pair_fee);
+            info!("fee       : {:#?}", repay_settings.fee);
 
-            let func = self.liquidator.liquidate(
-                *address,
-                repay.market_to_seize.unwrap_or(Address::zero()),
-                account.address,
-                max_repay,
-                pool_pair,
-                pair_fee,
-                fee,
-            );
+            let func = self
+                .liquidator
+                .liquidate(
+                    *address,
+                    repay.market_to_seize.unwrap_or(Address::zero()),
+                    account.address,
+                    repay_settings.max_repay,
+                    repay_settings.pool_pair,
+                    repay_settings.fee,
+                    repay_settings.pair_fee,
+                )
+                // Increase gas cost by 20%
+                .gas(gas_cost.mul_div_down(U256::from(120), U256::from(100)));
             info!("func: {:#?}", func);
             let tx = func.send().await;
             info!("tx: {:#?}", &tx);
@@ -283,7 +304,7 @@ impl<
         &self,
         account: Address,
         state: &ProtocolState,
-    ) -> Option<(bool, U256, Address, u32, u32)> {
+    ) -> Option<(bool, RepaySettings, U256, bool)> {
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
@@ -359,15 +380,51 @@ impl<
             .unwrap()
             .as_secs();
         let repay = Self::pick_markets(&market_account, &prices, timestamp.into(), &state.assets);
-        Self::is_profitable(
+        let repay_settings = Self::get_liquidation_settings(
             &repay,
             &liquidation_incentive,
-            state.gas_price,
-            prices[&self.market_weth_address],
+            self.repay_offset,
             &self.token_pairs,
             &self.tokens,
-            self.repay_offset,
-        )
+        );
+        let gas_cost = if let Some(address) = &repay.market_to_repay {
+            let func = self.liquidator.liquidate(
+                *address,
+                repay.market_to_seize.unwrap_or(Address::zero()),
+                account,
+                repay_settings.max_repay,
+                repay_settings.pool_pair,
+                repay_settings.pair_fee,
+                repay_settings.fee,
+            );
+
+            match func.estimate_gas().await {
+                Ok(gas) => gas,
+                Err(err) => {
+                    if let ContractError::Revert(_) = err {
+                        return Some((false, repay_settings, U256::from(500_000), true));
+                    } else {
+                        U256::from(500_000)
+                    }
+                }
+            }
+        } else {
+            U256::from(500_000)
+        };
+
+        Some((
+            Self::is_profitable(
+                &repay,
+                &repay_settings,
+                &liquidation_incentive,
+                state.gas_price,
+                gas_cost,
+                prices[&self.market_weth_address],
+            ),
+            repay_settings,
+            gas_cost,
+            false,
+        ))
     }
 
     pub fn pick_markets(
@@ -423,31 +480,24 @@ impl<
     #[allow(clippy::too_many_arguments)]
     pub fn is_profitable(
         repay: &Repay,
+        repay_settings: &RepaySettings,
         liquidation_incentive: &LiquidationIncentive,
         last_gas_price: U256,
+        gas_cost: U256,
         eth_price: U256,
-        token_pairs: &HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
-        tokens: &HashSet<Address>,
-        repay_offset: U256,
-    ) -> Option<(bool, U256, Address, u32, u32)> {
-        let max_repay = Self::max_repay_assets(repay, liquidation_incentive, U256::MAX)
-            .mul_wad_down(math::WAD + U256::exp10(14))
-            + repay_offset.mul_div_up(U256::exp10(repay.decimals as usize), repay.price);
-        let (pool_pair, pair_fee, fee): (Address, u32, u32) =
-            Self::get_flash_pair(repay, token_pairs, tokens);
-        let profit = Self::max_profit(repay, max_repay, liquidation_incentive);
+    ) -> bool {
+        let profit = Self::max_profit(repay, repay_settings.max_repay, liquidation_incentive);
         let cost = Self::max_cost(
             repay,
-            max_repay,
+            repay_settings.max_repay,
             liquidation_incentive,
-            U256::from(pair_fee),
-            U256::from(fee),
+            U256::from(repay_settings.pair_fee),
+            U256::from(repay_settings.fee),
             last_gas_price,
-            U256::from(1500u128),
+            gas_cost,
             eth_price,
         );
-        let profitable = profit > cost && profit - cost > math::WAD / U256::exp10(16);
-        Some((profitable, max_repay, pool_pair, pair_fee, fee))
+        profit > cost && profit - cost > math::WAD / U256::exp10(16)
     }
 
     fn get_flash_pair(
@@ -606,6 +656,87 @@ impl<
     ) {
         self.liquidator = Self::get_contracts(Arc::clone(&client_relay), chain_id_name);
     }
+
+    pub fn get_liquidation_settings(
+        repay: &Repay,
+        liquidation_incentive: &LiquidationIncentive,
+        repay_offset: U256,
+        token_pairs: &HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
+        tokens: &HashSet<Address>,
+    ) -> RepaySettings {
+        let max_repay = Self::max_repay_assets(repay, liquidation_incentive, U256::MAX)
+            .mul_wad_down(math::WAD + U256::exp10(14))
+            + repay_offset.mul_div_up(U256::exp10(repay.decimals as usize), repay.price);
+        let (pool_pair, pair_fee, fee): (Address, u32, u32) =
+            Self::get_flash_pair(repay, token_pairs, tokens);
+        RepaySettings {
+            max_repay,
+            pool_pair,
+            pair_fee,
+            fee,
+        }
+    }
+}
+
+fn gen_liq_breadcrumb(account: &Account, repay: &Repay, repay_settings: &RepaySettings) {
+    let mut data = BTreeMap::new();
+    data.insert(
+        "account".to_string(),
+        Value::String(account.address.to_string()),
+    );
+    data.insert(
+        "market to liquidate".to_string(),
+        Value::String(
+            repay
+                .market_to_repay
+                .map(|v| v.to_string())
+                .unwrap_or("market empty".to_string()),
+        ),
+    );
+    data.insert(
+        "market to seize".to_string(),
+        Value::String(
+            repay
+                .market_to_seize
+                .map(|v| v.to_string())
+                .unwrap_or("market empty".to_string()),
+        ),
+    );
+    data.insert(
+        "value to seize".to_string(),
+        Value::String(repay.market_to_seize_value.to_string()),
+    );
+    data.insert(
+        "collateral value".to_string(),
+        Value::String(repay.total_value_collateral.to_string()),
+    );
+    data.insert(
+        "debt value".to_string(),
+        Value::String(repay.total_value_debt.to_string()),
+    );
+    data.insert(
+        "repay value".to_string(),
+        Value::String(repay_settings.max_repay.to_string()),
+    );
+    data.insert(
+        "pool pair".to_string(),
+        Value::String(repay_settings.pool_pair.to_string()),
+    );
+    data.insert(
+        "pool fee".to_string(),
+        Value::String(repay_settings.fee.to_string()),
+    );
+    data.insert(
+        "pool pair fee".to_string(),
+        Value::String(repay_settings.pair_fee.to_string()),
+    );
+    sentry::add_breadcrumb(Breadcrumb {
+        ty: "error".to_string(),
+        category: Some("Reverting Liquidation".to_string()),
+        level: Level::Error,
+        data,
+        ..Default::default()
+    });
 }
 
 fn ordered_addresses(token0: Address, token1: Address) -> (Address, Address) {
