@@ -190,6 +190,7 @@ pub struct Protocol<M, W, S> {
     multicall: Multicall<SignerMiddleware<M, S>>,
     token_pairs: Arc<TokenPairFeeMap>,
     tokens: Arc<HashSet<Address>>,
+    wait_for_final_event: bool,
     data: ProtocolData,
     chain_id: u64,
 }
@@ -283,6 +284,7 @@ impl<
             multicall,
             tokens,
             token_pairs,
+            wait_for_final_event: false,
             data,
             chain_id: config.chain_id,
         })
@@ -438,46 +440,55 @@ impl<
                         };
                     }
                 }
-                DataFrom::Stream(stream) => {
-                    _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
-                    match stream {
-                        Ok(mut stream) => {
-                            _ = std::io::Write::flush(&mut writer);
-                            while let Some(log) = stream.next().await {
-                                let mut me = service.lock().await;
-                                let status = me.handle_log(log, &debounce_tx, &mut writer).await;
-                                match status {
-                                    Ok(result) => {
-                                        if let LogIterating::UpdateFilters = result {
-                                            first_block = me.data.last_sync.0;
-                                            continue 'filter;
+                DataFrom::Stream(stream) => match stream {
+                    Ok(mut stream) => {
+                        _ = std::io::Write::flush(&mut writer);
+                        while let Some(log) = stream.next().await {
+                            let mut me = service.lock().await;
+                            let status = me.handle_log(log, &debounce_tx, &mut writer).await;
+                            match status {
+                                Ok(result) => {
+                                    if let LogIterating::UpdateFilters = result {
+                                        _ = debounce_tx
+                                            .send(TaskActivity::StopCheckLiquidation)
+                                            .await;
+                                        first_block = me.data.last_sync.0;
+                                        continue 'filter;
+                                    } else {
+                                        if me.wait_for_final_event {
+                                            _ = debounce_tx
+                                                .send(TaskActivity::StopCheckLiquidation)
+                                                .await;
                                         } else {
-                                            let backup = serde_json::to_vec(&me.data).unwrap();
-                                            cacache::write(
-                                                ProtocolData::cache_path(me.chain_id),
-                                                CACHE_PROTOCOL,
-                                                &backup,
-                                            )
-                                            .await
-                                            .unwrap();
+                                            _ = debounce_tx
+                                                .send(TaskActivity::StartCheckLiquidation)
+                                                .await;
                                         }
+                                        let backup = serde_json::to_vec(&me.data).unwrap();
+                                        cacache::write(
+                                            ProtocolData::cache_path(me.chain_id),
+                                            CACHE_PROTOCOL,
+                                            &backup,
+                                        )
+                                        .await
+                                        .unwrap();
                                     }
-                                    Err(e) => {
-                                        error!("Error {:#?}", e);
-                                        break 'filter;
-                                    }
-                                };
-                            }
-                        }
-                        Err(e) => {
-                            error!("Error from stream: {:#?}", Backtrace::force_capture());
-                            if let SignerMiddlewareError::MiddlewareError(m) = &e {
-                                error!("error to subscribe (middleware): {:#?}", m);
-                            }
-                            panic!("subscribe disconnection: {:#?}", e);
+                                }
+                                Err(e) => {
+                                    error!("Error {:#?}", e);
+                                    break 'filter;
+                                }
+                            };
                         }
                     }
-                }
+                    Err(e) => {
+                        error!("Error from stream: {:#?}", Backtrace::force_capture());
+                        if let SignerMiddlewareError::MiddlewareError(m) = &e {
+                            error!("error to subscribe (middleware): {:#?}", m);
+                        }
+                        panic!("subscribe disconnection: {:#?}", e);
+                    }
+                },
             };
         }
         a.abort();
@@ -917,6 +928,8 @@ impl<
             }
 
             ExactlyEvents::AnswerUpdated(data) => {
+                // Comparison enabled again after NewTransmission event
+                self.wait_for_final_event = false;
                 self.data.markets.iter_mut().for_each(|(_, market)| {
                     if let Some(price_feed) = market
                         .price_feed
@@ -1050,7 +1063,10 @@ impl<
                         }
                     });
             }
-
+            ExactlyEvents::NewTransmission(_) => {
+                // Enable comparison just after receive AnswerUpdated event
+                self.wait_for_final_event = true;
+            }
             _ => {}
         }
         sender
