@@ -274,7 +274,7 @@ impl<
                     repay_settings.pair_fee,
                 )
                 // Increase gas cost by 20%
-                .gas(gas_cost.mul_div_down(U256::from(120), U256::from(100)));
+                .gas(gas_cost.mul_div_down(U256::from(150), U256::from(100)));
             info!("func: {:#?}", func);
             let tx = func.send().await;
             info!("tx: {:#?}", &tx);
