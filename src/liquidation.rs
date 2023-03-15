@@ -49,16 +49,11 @@ pub struct Repay {
     pub collateral_asset_address: Address,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum LiquidationAction {
+    #[default]
     Update,
     Insert,
-}
-
-impl Default for LiquidationAction {
-    fn default() -> Self {
-        LiquidationAction::Update
-    }
 }
 
 #[derive(Default, Debug)]

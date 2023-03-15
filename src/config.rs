@@ -82,7 +82,7 @@ impl Default for Config {
         let token_pairs = env::var("TOKEN_PAIRS").unwrap_or_else(|_| "".into());
 
         let repay_offset = utils::parse_units(
-            &env::var("REPAY_OFFSET").unwrap_or_else(|_| "0.001".into()),
+            env::var("REPAY_OFFSET").unwrap_or_else(|_| "0.001".into()),
             18,
         )
         .unwrap();

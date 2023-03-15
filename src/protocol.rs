@@ -1663,7 +1663,7 @@ impl<
             data.insert("block".to_string(), Value::Number(block.as_u64().into()));
             data.insert(
                 "timestamp".to_string(),
-                Value::String(String::from(timestamp.to_string())),
+                Value::String(timestamp.to_string()),
             );
             add_breadcrumb(Breadcrumb {
                 ty: "error".to_string(),
