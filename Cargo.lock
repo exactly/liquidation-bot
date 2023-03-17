@@ -2186,6 +2186,7 @@ dependencies = [
  "ethers",
  "eyre",
  "futures",
+ "hex",
  "log",
  "pin-project-lite",
  "pretty_env_logger",

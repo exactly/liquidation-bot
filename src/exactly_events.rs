@@ -35,7 +35,10 @@ use ethers::{
     prelude::EthLogDecode,
     types::H256,
 };
-use log::error;
+use sentry::Breadcrumb;
+use sentry::Level;
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,9 +295,33 @@ impl EthLogDecode for ExactlyEvents {
             return Ok(ExactlyEvents::Ignore(log.topics.get(0).copied()));
         };
 
-        error!("Missing event: {:?}", log);
+        missing_event_breadcrumb(log);
         panic!("Missing event {:?}", log.topics.get(0).copied());
     }
+}
+
+fn missing_event_breadcrumb(log: &RawLog) {
+    let mut data = BTreeMap::new();
+    data.insert(
+        "data".to_string(),
+        Value::String(hex::encode(log.data.clone())),
+    );
+    data.insert(
+        "topics".to_string(),
+        Value::Array(
+            log.topics
+                .iter()
+                .map(|t| Value::String(format!("{:X}", t)))
+                .collect(),
+        ),
+    );
+    sentry::add_breadcrumb(Breadcrumb {
+        ty: "error".to_string(),
+        category: Some("Missing event".to_string()),
+        level: Level::Error,
+        data,
+        ..Default::default()
+    });
 }
 
 mod aggregator_mod {

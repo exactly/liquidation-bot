@@ -21,12 +21,11 @@ use ethers::prelude::{
 use ethers::prelude::{Log, MulticallVersion, PubsubClient};
 use ethers::providers::SubscriptionStream;
 use ethers::types::H256;
-use eyre::{eyre, Result};
-use log::{error, info, warn};
+use eyre::{eyre, Report, Result};
+use log::{info, warn};
 use sentry::{add_breadcrumb, Breadcrumb, Level};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::backtrace::Backtrace;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::fs::File;
@@ -138,7 +137,7 @@ impl ProtocolData {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to load protocol data from cache: {}", e);
+                    warn!("Failed to load protocol data from cache: {}", e);
                     Self::new(auditor, deployed_block, config, market_weth_address).await?
                 }
             };
@@ -411,7 +410,7 @@ impl<
                                 }
                             }
                             Err(e) => {
-                                error!("Error {:#?}", e);
+                                protocol_error_breadcrumb(&e);
                                 break 'filter;
                             }
                         };
@@ -475,17 +474,40 @@ impl<
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Error {:#?}", e);
+                                    protocol_error_breadcrumb(&e);
                                     break 'filter;
                                 }
                             };
                         }
+                        let data = BTreeMap::new();
+                        sentry::add_breadcrumb(Breadcrumb {
+                            ty: "error".to_string(),
+                            category: Some("Stream closed".to_string()),
+                            level: Level::Error,
+                            data,
+                            ..Default::default()
+                        });
                     }
                     Err(e) => {
-                        error!("Error from stream: {:#?}", Backtrace::force_capture());
+                        let mut data = BTreeMap::new();
+                        data.insert(
+                            "error message".to_string(),
+                            Value::String(format!("{:?}", e)),
+                        );
                         if let SignerMiddlewareError::MiddlewareError(m) = &e {
-                            error!("error to subscribe (middleware): {:#?}", m);
+                            data.insert(
+                                "error message - middleware".to_string(),
+                                Value::String(format!("{:?}", m)),
+                            );
                         }
+                        sentry::add_breadcrumb(Breadcrumb {
+                            ty: "error".to_string(),
+                            category: Some("Connection error".to_string()),
+                            level: Level::Error,
+                            data,
+                            ..Default::default()
+                        });
+
                         panic!("subscribe disconnection: {:#?}", e);
                     }
                 },
@@ -2133,6 +2155,23 @@ impl<
         };
         Ok((hf, adjusted_collateral, adjusted_debt, repay))
     }
+}
+
+fn protocol_error_breadcrumb(e: &Report) {
+    let mut data = BTreeMap::new();
+
+    data.insert(
+        "error message".to_string(),
+        Value::String(format!("{:?}", e)),
+    );
+
+    sentry::add_breadcrumb(Breadcrumb {
+        ty: "error".to_string(),
+        category: Some("Protocol generic error".to_string()),
+        level: Level::Error,
+        data,
+        ..Default::default()
+    });
 }
 
 fn sentry_breadcrumb(meta: &LogMeta, topics: Vec<H256>, log_data: Vec<u8>, event: &ExactlyEvents) {

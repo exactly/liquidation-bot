@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::panic;
 use std::process;
 use std::sync::Arc;
@@ -21,11 +22,14 @@ mod generate_abi;
 
 pub use account::*;
 pub use exactly_events::*;
-use log::error;
 use log::info;
+use log::warn;
 pub use market::Market;
 pub use protocol::Protocol;
 use sentry::integrations::log::SentryLogger;
+use sentry::Breadcrumb;
+use sentry::Level;
+use serde_json::Value;
 
 use crate::config::Config;
 
@@ -68,7 +72,23 @@ async fn main() -> Result<()> {
     }
 
     panic::set_hook(Box::new(|panic_info| {
-        error!("panic: {:?}", panic_info);
+        let mut data = BTreeMap::new();
+        data.insert(
+            "message".to_string(),
+            Value::String(format!("{:?}", panic_info)),
+        );
+        if let Some(location) = panic_info.location() {
+            data.insert("message".to_string(), Value::String(location.to_string()));
+        }
+
+        sentry::add_breadcrumb(Breadcrumb {
+            ty: "error".to_string(),
+            category: Some("panic".to_string()),
+            level: Level::Error,
+            data,
+            ..Default::default()
+        });
+
         if let Some(client) = sentry::Hub::current().client() {
             client.close(Some(Duration::from_secs(2)));
         }
@@ -120,7 +140,7 @@ async fn main() -> Result<()> {
                         Some(current_service)
                     }
                     Err(e) => {
-                        error!("credit service error: {:?}", e);
+                        warn!("credit service error: {:?}", e);
 
                         // println!("error: {:?}", e);
                         update_client = true;

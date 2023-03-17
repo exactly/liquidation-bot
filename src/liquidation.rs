@@ -225,8 +225,8 @@ impl<
                 Some(response) => response,
                 None => return Ok(()),
             };
+            gen_liq_breadcrumb(account, repay, &repay_settings);
             if will_revert {
-                gen_liq_breadcrumb(account, repay, &repay_settings);
                 error!("Liquidation would revert - not sent");
                 return Ok(());
             }

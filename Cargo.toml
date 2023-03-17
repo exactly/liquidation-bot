@@ -16,6 +16,7 @@ dotenv = "0.15.0"
 ethers = { version = "2.0.0", features = ["ws", "rustls"] }
 eyre = "0.6.8"
 futures = "0.3.26"
+hex = "0.4.3"
 log = { version = "0.4.17", features = ["std"] }
 pin-project-lite = "0.2.9"
 pretty_env_logger = "0.4.0"
