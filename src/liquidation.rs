@@ -2,7 +2,7 @@ use super::config::Config;
 use super::fixed_point_math::{math, FixedPointMath, FixedPointMathGen};
 use super::protocol::TokenPairFeeMap;
 use ethers::prelude::{
-    Address, ContractError, Middleware, Multicall, MulticallVersion, Signer, SignerMiddleware, U256,
+    Address, Middleware, Multicall, MulticallVersion, Signer, SignerMiddleware, U256,
 };
 use eyre::Result;
 use log::{error, info};
@@ -265,8 +265,8 @@ impl<
                     account.address,
                     repay_settings.max_repay,
                     repay_settings.pool_pair,
-                    repay_settings.fee,
                     repay_settings.pair_fee,
+                    repay_settings.fee,
                 )
                 // Increase gas cost by 20%
                 .gas(gas_cost.mul_div_down(U256::from(150), U256::from(100)));
@@ -396,11 +396,16 @@ impl<
             match func.estimate_gas().await {
                 Ok(gas) => gas,
                 Err(err) => {
-                    if let ContractError::Revert(_) = err {
-                        return Some((false, repay_settings, U256::from(500_000), true));
-                    } else {
-                        U256::from(500_000)
-                    }
+                    let mut data = BTreeMap::new();
+                    data.insert("message".to_string(), Value::String(err.to_string()));
+                    sentry::add_breadcrumb(Breadcrumb {
+                        ty: "error".to_string(),
+                        category: Some("estimating gas".to_string()),
+                        level: Level::Error,
+                        data,
+                        ..Default::default()
+                    });
+                    return Some((false, repay_settings, U256::from(500_000), true));
                 }
             }
         } else {
