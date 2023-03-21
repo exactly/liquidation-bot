@@ -166,6 +166,9 @@ async fn main() -> Result<()> {
                 attach_stacktrace: true,
                 default_integrations: true,
                 max_breadcrumbs: 1000,
+                traces_sample_rate: 1.0,
+                enable_profiling: true,
+                profiles_sample_rate: 1.0,
                 ..Default::default()
             },
         ))

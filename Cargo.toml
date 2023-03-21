@@ -20,7 +20,7 @@ hex = "0.4.3"
 log = { version = "0.4.17", features = ["std"] }
 pin-project-lite = "0.2.9"
 pretty_env_logger = "0.4.0"
-sentry = { version = "0.30.0", features = ["log", "debug-images"] }
+sentry = { version = "0.30.0", features = ["log", "debug-images", "profiling"] }
 serde = { version = "1.0.154", features = ["derive"] }
 serde_json = "1.0.94"
 tokio = { version = "1.26.0", features = ["macros", "rt-multi-thread"] }
