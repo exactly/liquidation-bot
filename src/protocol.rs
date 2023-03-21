@@ -192,6 +192,7 @@ pub struct Protocol<M, W, S> {
     wait_for_final_event: bool,
     data: ProtocolData,
     chain_id: u64,
+    config: Config,
 }
 
 impl<
@@ -293,6 +294,7 @@ impl<
             wait_for_final_event: false,
             data,
             chain_id: config.chain_id,
+            config: config.clone(),
         })
     }
 
@@ -726,6 +728,7 @@ impl<
                 multicall.add_call(contract.asset(), false);
                 multicall.add_call(contract.last_accumulator_accrual(), false);
                 multicall.add_call(contract.last_floating_debt_update(), false);
+                multicall.add_call(contract.symbol(), false);
                 multicall = multicall
                     .version(MulticallVersion::Multicall)
                     .block(meta.block_number);
@@ -738,6 +741,7 @@ impl<
                     asset,
                     last_accumulator_accrual,
                     last_floating_debt_update,
+                    symbol,
                 ) = multicall.call().await?;
                 market.max_future_pools = max_future_pools;
                 market.earnings_accumulator_smooth_factor = earnings_accumulator_smooth_factor;
@@ -747,7 +751,7 @@ impl<
                 market.asset = asset;
                 market.last_accumulator_accrual = last_accumulator_accrual;
                 market.last_floating_debt_update = last_floating_debt_update;
-
+                market.symbol = symbol;
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
                 multicall.clear_calls();
@@ -1284,10 +1288,15 @@ impl<
             }
         }
         info!(
-            "accounts to liquidate {} / {} on block {}",
+            "accounts to liquidate {} / {} on block {} {}",
             liquidations.len(),
             self.data.accounts.len(),
             block_number,
+            if self.config.simulation {
+                " [SIMULATION]"
+            } else {
+                ""
+            }
         );
         if !liquidations.is_empty() {
             self.liquidation_sender
@@ -1331,9 +1340,21 @@ impl<
         last_gas_price: &U256,
         liquidations: &mut HashMap<Address, (Account, Repay)>,
     ) {
-        let hf = Self::compute_hf(&self.data.markets, account, to_timestamp);
+        let hf = Self::compute_hf(
+            &self.data.markets,
+            account,
+            to_timestamp,
+            Some(&self.config),
+        );
         if let Ok((hf, _, _, repay)) = hf {
-            if hf < math::WAD && repay.total_adjusted_debt != U256::zero() {
+            if repay.total_adjusted_debt != U256::zero() {
+                info!("{:<20?}: {:>28}", address, hf);
+            }
+
+            if hf < math::WAD
+                && repay.total_adjusted_debt != U256::zero()
+                && !self.config.simulation
+            {
                 let repay_settings = Liquidation::<M, W, S>::get_liquidation_settings(
                     &repay,
                     &self.data.liquidation_incentive,
@@ -1514,6 +1535,7 @@ impl<
             &self.data.markets,
             &self.data.accounts[&data.borrower],
             timestamp,
+            None,
         )?;
 
         let close_factor =
@@ -1651,7 +1673,7 @@ impl<
                 if adjusted_debt > U256::zero() {
                     let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
                     if let Some(account) = self.data.accounts.get(address) {
-                        let hf = Self::compute_hf(&self.data.markets, account, timestamp).map(
+                        let _ = Self::compute_hf(&self.data.markets, account, timestamp, None).map(
                             |(hf, collateral, debt, _)| {
                                 let print = i == 0;
                                 success &= compare!(
@@ -1673,12 +1695,6 @@ impl<
                                     compare!("debt", &account, "", adjusted_debt, debt, print);
                                 hf
                             },
-                        );
-                        info!(
-                            "{:<20?}: {:>24}{}",
-                            address,
-                            hf.as_ref().unwrap_or(&previewer_hf),
-                            if hf.is_err() { "*" } else { "" }
                         );
                     }
                 }
@@ -2039,7 +2055,7 @@ impl<
                 info!("health factor      : {}", previewer_hf);
                 if let Some(account) = self.data.accounts.get(&account) {
                     if let Ok((hf, collateral, debt, _)) =
-                        Self::compute_hf(&self.data.markets, account, timestamp)
+                        Self::compute_hf(&self.data.markets, account, timestamp, None)
                     {
                         success &= compare!("health_factor", &account, "", previewer_hf, hf);
                         success &=
@@ -2099,10 +2115,22 @@ impl<
         (contract, abi, block_number)
     }
 
+    fn pick_adjust_factor(market: &Market, config: Option<&Config>) -> U256 {
+        if let Some(config) = config {
+            if config.simulation {
+                if let Some(adjust_factor) = config.adjust_factor.get(&market.symbol) {
+                    return *adjust_factor;
+                }
+            }
+        }
+        market.adjust_factor
+    }
+
     fn compute_hf(
         markets: &HashMap<Address, Market>,
         account: &Account,
         timestamp: U256,
+        config: Option<&Config>,
     ) -> Result<(U256, U256, U256, Repay)> {
         let mut total_collateral: U256 = U256::zero();
         let mut adjusted_collateral: U256 = U256::zero();
@@ -2111,13 +2139,14 @@ impl<
         let mut repay = Repay::default();
         for (market_address, position) in account.positions.iter() {
             let market = markets.get(market_address).unwrap();
+            let adjust_factor = Self::pick_adjust_factor(market, config);
             if position.is_collateral {
                 let current_collateral =
                     position.floating_deposit_assets::<M, S>(market, timestamp);
                 let value = current_collateral
                     .mul_div_down(market.price, U256::exp10(market.decimals as usize));
                 total_collateral += value;
-                adjusted_collateral += value.mul_wad_down(market.adjust_factor);
+                adjusted_collateral += value.mul_wad_down(adjust_factor);
                 if value >= repay.market_to_seize_value {
                     repay.market_to_seize_value = value;
                     repay.market_to_seize = Some(*market_address);
@@ -2137,7 +2166,7 @@ impl<
             let value =
                 current_debt.mul_div_up(market.price, U256::exp10(market.decimals as usize));
             total_debt += value;
-            adjusted_debt += value.div_wad_up(market.adjust_factor);
+            adjusted_debt += value.div_wad_up(adjust_factor);
             if value >= repay.market_to_liquidate_debt {
                 repay.price = market.price;
                 repay.decimals = market.decimals;

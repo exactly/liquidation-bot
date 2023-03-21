@@ -3,6 +3,7 @@ extern crate dotenv;
 use ethers::prelude::{coins_bip39::English, k256::ecdsa::SigningKey, MnemonicBuilder, Wallet};
 use ethers::types::U256;
 use ethers::utils::{self, ParseUnits};
+use std::collections::HashMap;
 use std::env;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -20,6 +21,8 @@ pub struct Config {
     pub liquidate_unprofitable: bool,
     pub repay_offset: U256,
     pub sentry_dsn: Option<String>,
+    pub simulation: bool,
+    pub adjust_factor: HashMap<String, U256>,
 }
 
 impl Default for Config {
@@ -81,6 +84,26 @@ impl Default for Config {
 
         let token_pairs = env::var("TOKEN_PAIRS").unwrap_or_else(|_| "".into());
 
+        let simulation: bool = env::var("SIMULATION")
+            .unwrap_or_else(|_| "false".into())
+            .parse::<bool>()
+            .unwrap_or(false);
+
+        let adjust_factor = env::var("ADJUST_FACTOR").unwrap_or_else(|_| "".into());
+        let adjust_factor: HashMap<String, U256> =
+            serde_json::from_str::<HashMap<String, String>>(&adjust_factor)
+                .map(|x| {
+                    x.into_iter()
+                        .map(|(k, v)| {
+                            (
+                                "exa".to_string() + &k,
+                                U256::from_dec_str(&v).unwrap_or(U256::zero()),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or(HashMap::new());
+
         let repay_offset = utils::parse_units(
             env::var("REPAY_OFFSET").unwrap_or_else(|_| "0.001".into()),
             18,
@@ -110,6 +133,8 @@ impl Default for Config {
             liquidate_unprofitable,
             repay_offset,
             sentry_dsn,
+            simulation,
+            adjust_factor,
         }
     }
 }

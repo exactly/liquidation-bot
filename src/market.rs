@@ -99,6 +99,7 @@ pub struct Market {
     pub treasury_fee_rate: U256,
     pub asset: Address,
     pub base_market: bool,
+    pub symbol: String,
 }
 
 impl Eq for Market {}
@@ -139,6 +140,7 @@ impl Market {
             treasury_fee_rate: Default::default(),
             asset: Default::default(),
             base_market: false,
+            symbol: Default::default(),
         }
     }
 
