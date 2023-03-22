@@ -174,6 +174,7 @@ async fn main() -> Result<()> {
         ))
     });
 
+    info!("Liquidation bot v{} starting", env!("CARGO_PKG_VERSION"));
     dbg!(&config);
 
     let mut credit_service: Option<Arc<Mutex<ExactlyProtocol>>> = None;
