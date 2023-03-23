@@ -7,7 +7,7 @@ use crate::generate_abi::{
     AggregatorProxy, Auditor, LiquidationIncentive, Previewer, PriceFeed, PriceFeedDouble,
     PriceFeedLido, PriceFeedWrapper,
 };
-use crate::liquidation::{LiquidationAction, ProtocolState};
+use crate::liquidation::{self, LiquidationAction, ProtocolState};
 use crate::market::{PriceDouble, PriceFeedController, PriceFeedType, PriceRate};
 use crate::{Account, Market};
 use ethers::abi::Tokenize;
@@ -1363,15 +1363,22 @@ impl<
                     &self.tokens,
                 );
 
-                if Liquidation::<M, W, S>::is_profitable(
+                let (profitable, profit, cost) = Liquidation::<M, W, S>::is_profitable(
                     &repay,
                     &repay_settings,
                     &self.data.liquidation_incentive,
                     *last_gas_price,
                     U256::from(500_000u128),
                     self.data.markets[&self.data.market_weth_address].price,
-                ) {
+                );
+                if profitable {
                     liquidations.insert(*address, (account.clone(), repay));
+                } else {
+                    liquidation::gen_liq_breadcrumb(account, &repay, &repay_settings);
+                    warn!(
+                        "liquidation not profitable for {:#?} (profit: {:#?} cost: {:#?})",
+                        address, profit, cost
+                    );
                 }
             }
         }

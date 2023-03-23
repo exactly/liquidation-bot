@@ -5,7 +5,7 @@ use ethers::prelude::{
     Address, Middleware, Multicall, MulticallVersion, Signer, SignerMiddleware, U256,
 };
 use eyre::Result;
-use log::{error, info};
+use log::{error, info, warn};
 use sentry::{Breadcrumb, Level};
 use serde::Deserialize;
 use serde_json::Value;
@@ -221,7 +221,8 @@ impl<
         if let Some(address) = &repay.market_to_repay {
             let response = self.is_profitable_async(account.address, state).await;
 
-            let (profitable, repay_settings, gas_cost, will_revert) = match response {
+            let ((profitable, profit, cost), repay_settings, gas_cost, will_revert) = match response
+            {
                 Some(response) => response,
                 None => return Ok(()),
             };
@@ -232,12 +233,10 @@ impl<
             }
 
             if !profitable && !self.liquidate_unprofitable {
-                info!("not profitable to liquidate");
-                info!(
-                    "repay$: {:?}",
-                    repay_settings
-                        .max_repay
-                        .mul_div_up(repay.price, U256::exp10(repay.decimals as usize))
+                gen_liq_breadcrumb(account, repay, &repay_settings);
+                warn!(
+                    "liquidation not profitable for {:#?} (profit: {:#?} cost: {:#?})",
+                    account.address, profit, cost
                 );
                 return Ok(());
             }
@@ -299,7 +298,7 @@ impl<
         &self,
         account: Address,
         state: &ProtocolState,
-    ) -> Option<(bool, RepaySettings, U256, bool)> {
+    ) -> Option<((bool, U256, U256), RepaySettings, U256, bool)> {
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
@@ -405,7 +404,12 @@ impl<
                         data,
                         ..Default::default()
                     });
-                    return Some((false, repay_settings, U256::from(500_000), true));
+                    return Some((
+                        (false, U256::zero(), U256::zero()),
+                        repay_settings,
+                        U256::from(500_000),
+                        true,
+                    ));
                 }
             }
         } else {
@@ -485,7 +489,7 @@ impl<
         last_gas_price: U256,
         gas_cost: U256,
         eth_price: U256,
-    ) -> bool {
+    ) -> (bool, U256, U256) {
         let profit = Self::max_profit(repay, repay_settings.max_repay, liquidation_incentive);
         let cost = Self::max_cost(
             repay,
@@ -497,7 +501,11 @@ impl<
             gas_cost,
             eth_price,
         );
-        profit > cost && profit - cost > math::WAD / U256::exp10(16)
+        (
+            profit > cost && profit - cost > math::WAD / U256::exp10(16),
+            profit,
+            cost,
+        )
     }
 
     fn get_flash_pair(
@@ -678,7 +686,7 @@ impl<
     }
 }
 
-fn gen_liq_breadcrumb(account: &Account, repay: &Repay, repay_settings: &RepaySettings) {
+pub fn gen_liq_breadcrumb(account: &Account, repay: &Repay, repay_settings: &RepaySettings) {
     let mut data = BTreeMap::new();
     data.insert(
         "account".to_string(),
