@@ -23,6 +23,10 @@ pub struct Config {
     pub sentry_dsn: Option<String>,
     pub simulation: bool,
     pub adjust_factor: HashMap<String, U256>,
+    pub gas_price: U256,
+    pub gas_used: U256,
+    pub l1_gas_price: U256,
+    pub l1_gas_used: U256,
 }
 
 impl Default for Config {
@@ -121,6 +125,30 @@ impl Default for Config {
 
         let sentry_dsn = env::var("SENTRY_DSN").ok();
 
+        let gas_price = U256::from_dec_str(&env::var("GAS_PRICE").expect("GAS_PRICE is not set"))
+            .expect("GAS_PRICE is not number");
+
+        let gas_used = U256::from_dec_str(&env::var("GAS_USED").expect("GAS_USED is not set"))
+            .expect("GAS_USED is not number");
+
+        let l1_gas_price = U256::from_dec_str(&env::var("L1_GAS_PRICE").unwrap_or_else(|_| {
+            if chain_id != 10 {
+                "0".to_string()
+            } else {
+                panic!("L1_GAS_PRICE is not set")
+            }
+        }))
+        .expect("L1_GAS_PRICE is not number");
+
+        let l1_gas_used = U256::from_dec_str(&env::var("L1_GAS_USED").unwrap_or_else(|_| {
+            if chain_id != 10 {
+                "0".to_string()
+            } else {
+                panic!("L1_GAS_USED is not set")
+            }
+        }))
+        .expect("L1_GAS_USED is not number");
+
         Config {
             chain_id,
             chain_id_name: chain_id_name.into(),
@@ -135,6 +163,10 @@ impl Default for Config {
             sentry_dsn,
             simulation,
             adjust_factor,
+            gas_price,
+            gas_used,
+            l1_gas_price,
+            l1_gas_used,
         }
     }
 }

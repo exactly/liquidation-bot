@@ -24,6 +24,7 @@ use super::{
     Account,
 };
 use crate::generate_abi::{Auditor, LiquidationIncentive, Liquidator, MarketAccount, Previewer};
+use crate::network::{Network, NetworkStatus};
 
 #[derive(Default, Debug)]
 pub struct RepaySettings {
@@ -58,7 +59,7 @@ pub enum LiquidationAction {
 
 #[derive(Default, Debug)]
 pub struct ProtocolState {
-    pub gas_price: U256,
+    pub gas_price: Option<U256>,
     pub markets: Vec<Address>,
     pub assets: HashMap<Address, Address>,
     pub price_feeds: HashMap<Address, Address>,
@@ -83,6 +84,7 @@ pub struct Liquidation<M, W, S> {
     backup: u32,
     liquidate_unprofitable: bool,
     repay_offset: U256,
+    network: Arc<Network>,
 }
 
 impl<
@@ -91,6 +93,7 @@ impl<
         S: 'static + Signer + Clone,
     > Liquidation<M, W, S>
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: Arc<SignerMiddleware<M, S>>,
         client_relay: Arc<SignerMiddleware<W, S>>,
@@ -99,6 +102,7 @@ impl<
         auditor: Auditor<SignerMiddleware<M, S>>,
         market_weth_address: Address,
         config: &Config,
+        network: Arc<Network>,
     ) -> Self {
         let (token_pairs, tokens) = parse_token_pairs(token_pairs);
         let token_pairs = Arc::new(token_pairs);
@@ -116,6 +120,7 @@ impl<
             backup: config.backup,
             liquidate_unprofitable: config.liquidate_unprofitable,
             repay_offset: config.repay_offset,
+            network,
         }
     }
 
@@ -221,7 +226,7 @@ impl<
         if let Some(address) = &repay.market_to_repay {
             let response = self.is_profitable_async(account.address, state).await;
 
-            let ((profitable, profit, cost), repay_settings, gas_cost, will_revert) = match response
+            let ((profitable, profit, cost), repay_settings, gas_used, will_revert) = match response
             {
                 Some(response) => response,
                 None => return Ok(()),
@@ -268,7 +273,11 @@ impl<
                     repay_settings.fee,
                 )
                 // Increase gas cost by 20%
-                .gas(gas_cost.mul_div_down(U256::from(150), U256::from(100)));
+                .gas(
+                    gas_used
+                        .unwrap_or(self.network.default_gas_used())
+                        .mul_div_down(U256::from(150), U256::from(100)),
+                );
             info!("func: {:#?}", func);
             let tx = func.send().await;
             info!("tx: {:#?}", &tx);
@@ -298,7 +307,7 @@ impl<
         &self,
         account: Address,
         state: &ProtocolState,
-    ) -> Option<((bool, U256, U256), RepaySettings, U256, bool)> {
+    ) -> Option<((bool, U256, U256), RepaySettings, Option<U256>, bool)> {
         let mut multicall =
             Multicall::<SignerMiddleware<M, S>>::new(Arc::clone(&self.client), None)
                 .await
@@ -381,7 +390,9 @@ impl<
             &self.token_pairs,
             &self.tokens,
         );
-        let gas_cost = if let Some(address) = &repay.market_to_repay {
+
+        // check if transaction will revert
+        let gas_used = if let Some(address) = &repay.market_to_repay {
             let func = self.liquidator.liquidate(
                 *address,
                 repay.market_to_seize.unwrap_or(Address::zero()),
@@ -407,26 +418,35 @@ impl<
                     return Some((
                         (false, U256::zero(), U256::zero()),
                         repay_settings,
-                        U256::from(500_000),
+                        None,
                         true,
                     ));
                 }
             }
         } else {
-            U256::from(500_000)
+            return None;
+        };
+
+        let gas_used = if self.network.can_estimate_gas() {
+            Some(gas_used)
+        } else {
+            None
         };
 
         Some((
             Self::is_profitable(
+                &self.network,
                 &repay,
                 &repay_settings,
                 &liquidation_incentive,
-                state.gas_price,
-                gas_cost,
-                prices[&self.market_weth_address],
+                NetworkStatus {
+                    gas_price: state.gas_price,
+                    gas_used,
+                    eth_price: prices[&self.market_weth_address],
+                },
             ),
             repay_settings,
-            gas_cost,
+            gas_used,
             false,
         ))
     }
@@ -483,23 +503,21 @@ impl<
 
     #[allow(clippy::too_many_arguments)]
     pub fn is_profitable(
+        network: &Network,
         repay: &Repay,
         repay_settings: &RepaySettings,
         liquidation_incentive: &LiquidationIncentive,
-        last_gas_price: U256,
-        gas_cost: U256,
-        eth_price: U256,
+        network_status: NetworkStatus,
     ) -> (bool, U256, U256) {
         let profit = Self::max_profit(repay, repay_settings.max_repay, liquidation_incentive);
         let cost = Self::max_cost(
+            network,
             repay,
             repay_settings.max_repay,
             liquidation_incentive,
             U256::from(repay_settings.pair_fee),
             U256::from(repay_settings.fee),
-            last_gas_price,
-            gas_cost,
-            eth_price,
+            network_status,
         );
         (
             profit > cost && profit - cost > math::WAD / U256::exp10(16),
@@ -612,20 +630,19 @@ impl<
 
     #[allow(clippy::too_many_arguments)]
     fn max_cost(
+        network: &Network,
         repay: &Repay,
         max_repay: U256,
         liquidation_incentive: &LiquidationIncentive,
         swap_pair_fee: U256,
         swap_fee: U256,
-        gas_price: U256,
-        gas_cost: U256,
-        eth_price: U256,
+        network_status: NetworkStatus,
     ) -> U256 {
         let max_repay = max_repay.mul_div_down(repay.price, U256::exp10(repay.decimals as usize));
         max_repay.mul_wad_down(U256::from(liquidation_incentive.lenders))
             + max_repay.mul_wad_down(swap_fee * U256::exp10(12))
             + max_repay.mul_wad_down(swap_pair_fee * U256::exp10(12))
-            + (gas_price * gas_cost).mul_wad_down(eth_price)
+            + network.tx_cost(network_status)
     }
 
     pub fn calculate_close_factor(

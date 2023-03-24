@@ -9,6 +9,7 @@ use crate::generate_abi::{
 };
 use crate::liquidation::{self, LiquidationAction, ProtocolState};
 use crate::market::{PriceDouble, PriceFeedController, PriceFeedType, PriceRate};
+use crate::network::{Network, NetworkStatus};
 use crate::{Account, Market};
 use ethers::abi::Tokenize;
 use ethers::prelude::builders::ContractCall;
@@ -45,7 +46,6 @@ use crate::generate_abi::MarketAccount;
 #[cfg(feature = "liquidation-stats")]
 use crate::generate_abi::LiquidateFilter;
 
-const DEFAULT_GAS_PRICE: U256 = math::make_u256(10_000u64);
 pub const BASE_FEED: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
 const CACHE_PATH: &str = "cache";
@@ -193,6 +193,7 @@ pub struct Protocol<M, W, S> {
     data: ProtocolData,
     chain_id: u64,
     config: Config,
+    network: Arc<Network>,
 }
 
 impl<
@@ -255,6 +256,8 @@ impl<
             config.chain_id_name
         ));
 
+        let network = Arc::new(Network::from_config(config));
+
         let (liquidation_sender, liquidation_receiver) = mpsc::channel(1);
 
         let liquidation = Arc::new(Mutex::new(Liquidation::new(
@@ -265,6 +268,7 @@ impl<
             auditor.clone(),
             market_weth_address,
             config,
+            Arc::clone(&network),
         )));
 
         let liquidation_lock = liquidation.lock().await;
@@ -295,6 +299,7 @@ impl<
             data,
             chain_id: config.chain_id,
             config: config.clone(),
+            network: Arc::clone(&network),
         })
     }
 
@@ -319,7 +324,6 @@ impl<
         let mut block_number = None;
         let mut check_liquidations = false;
         let mut liquidation_checked = false;
-        let mut last_gas_price = DEFAULT_GAS_PRICE;
         let mut user = None;
         loop {
             let d = Duration::from_millis(2_000);
@@ -342,11 +346,7 @@ impl<
                 Err(_) => {
                     if check_liquidations && !liquidation_checked {
                         if let Some(block) = block_number {
-                            let lock = service
-                                .lock()
-                                .await
-                                .check_liquidations(block, &mut last_gas_price, user)
-                                .await;
+                            let lock = service.lock().await.check_liquidations(block, user).await;
                             liquidation_checked = true;
                             drop(lock);
                         }
@@ -1245,20 +1245,16 @@ impl<
         Ok(())
     }
 
-    async fn check_liquidations(
-        &self,
-        block_number: U64,
-        last_gas_price: &mut U256,
-        user: Option<Address>,
-    ) -> Result<()> {
+    async fn check_liquidations(&self, block_number: U64, user: Option<Address>) -> Result<()> {
         let block = self
             .client
             .provider()
             .get_block(block_number)
             .await?
             .unwrap();
-        *last_gas_price =
-            block.base_fee_per_gas.unwrap_or(*last_gas_price) + U256::from(1_500_000_000u128);
+        let last_gas_price = block
+            .base_fee_per_gas
+            .map(|x| x + U256::from(1_500_000_000u128));
 
         let to_timestamp = block.timestamp;
 
@@ -1308,7 +1304,7 @@ impl<
                         LiquidationAction::Insert
                     },
                     state: ProtocolState {
-                        gas_price: *last_gas_price,
+                        gas_price: last_gas_price,
                         markets: self.data.markets.keys().cloned().collect(),
                         assets: self
                             .data
@@ -1337,7 +1333,7 @@ impl<
         address: &Address,
         account: &Account,
         to_timestamp: U256,
-        last_gas_price: &U256,
+        gas_price: Option<U256>,
         liquidations: &mut HashMap<Address, (Account, Repay)>,
     ) {
         let hf = Self::compute_hf(
@@ -1364,12 +1360,15 @@ impl<
                 );
 
                 let (profitable, profit, cost) = Liquidation::<M, W, S>::is_profitable(
+                    &self.network,
                     &repay,
                     &repay_settings,
                     &self.data.liquidation_incentive,
-                    *last_gas_price,
-                    U256::from(500_000u128),
-                    self.data.markets[&self.data.market_weth_address].price,
+                    NetworkStatus {
+                        gas_price,
+                        gas_used: None,
+                        eth_price: self.data.markets[&self.data.market_weth_address].price,
+                    },
                 );
                 if profitable {
                     liquidations.insert(*address, (account.clone(), repay));
@@ -1459,8 +1458,8 @@ impl<
         let current_block_data = current_block_data.unwrap();
         let timestamp = current_block_data.timestamp;
         let receipt = receipt.unwrap();
-        let gas_cost = receipt.gas_used.unwrap();
-        let gas_price = gas_cost
+        let gas_used = receipt.gas_used.unwrap();
+        let gas_cost = gas_used
             * receipt
                 .effective_gas_price
                 .unwrap()
@@ -1571,8 +1570,8 @@ impl<
             current_hf,
             liquidators_fee,
             data.lenders_assets,
-            gas_cost,
-            gas_price
+            gas_used,
+            gas_cost
         ))?;
         for (_, (symbol, supply)) in total_supply_per_market {
             writer.write_fmt(format_args!(

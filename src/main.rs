@@ -14,6 +14,7 @@ mod account;
 mod config;
 mod exactly_events;
 mod market;
+mod network;
 mod protocol;
 
 mod fixed_point_math;
