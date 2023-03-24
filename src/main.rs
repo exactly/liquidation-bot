@@ -132,6 +132,25 @@ async fn main() -> Result<()> {
         log::set_max_level(log::LevelFilter::Info);
     }
 
+    let config = Config::default();
+
+    let _guard = config.sentry_dsn.clone().map(|sentry_dsn| {
+        sentry::init((
+            sentry_dsn,
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                debug: true,
+                attach_stacktrace: true,
+                default_integrations: true,
+                max_breadcrumbs: 1000,
+                traces_sample_rate: 1.0,
+                enable_profiling: true,
+                profiles_sample_rate: 1.0,
+                ..Default::default()
+            },
+        ))
+    });
+
     panic::set_hook(Box::new(|panic_info| {
         let mut data = BTreeMap::new();
         data.insert(
@@ -155,25 +174,6 @@ async fn main() -> Result<()> {
         }
         process::abort();
     }));
-
-    let config = Config::default();
-
-    let _guard = config.sentry_dsn.clone().map(|sentry_dsn| {
-        sentry::init((
-            sentry_dsn,
-            sentry::ClientOptions {
-                release: sentry::release_name!(),
-                debug: true,
-                attach_stacktrace: true,
-                default_integrations: true,
-                max_breadcrumbs: 1000,
-                traces_sample_rate: 1.0,
-                enable_profiling: true,
-                profiles_sample_rate: 1.0,
-                ..Default::default()
-            },
-        ))
-    });
 
     info!("Liquidation bot v{} starting", env!("CARGO_PKG_VERSION"));
     dbg!(&config);
