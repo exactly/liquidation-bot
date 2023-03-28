@@ -186,11 +186,14 @@ async fn main() -> Result<()> {
             if let Some(service) = &mut credit_service {
                 if update_client {
                     info!("Updating client");
-                    service
-                        .lock()
-                        .await
-                        .update_client(Arc::clone(client), Arc::clone(client_relayer), &config)
-                        .await;
+                    info!("service reference count: {}", Arc::strong_count(service));
+                    if let Ok(service) = &mut service.try_lock() {
+                        service
+                            .update_client(Arc::clone(client), Arc::clone(client_relayer), &config)
+                            .await;
+                    } else {
+                        panic!("service is locked");
+                    }
                     update_client = false;
                 }
             } else {
