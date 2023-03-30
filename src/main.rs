@@ -203,6 +203,7 @@ async fn main() -> Result<()> {
                 )));
             }
             if let Some(service) = &credit_service {
+                info!("launching service");
                 match Protocol::launch(Arc::clone(service)).await {
                     Ok(()) => {
                         break;
