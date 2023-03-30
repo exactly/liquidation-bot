@@ -71,6 +71,7 @@ enum TaskActivity {
     StopCheckLiquidation,
     UpdateAll(Option<U64>),
     UpdateUser((Option<U64>, Address)),
+    Finish,
 }
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug, Serialize, Deserialize)]
@@ -341,8 +342,9 @@ impl<
                         liquidation_checked = false;
                         user = Some(user_to_check);
                     }
+                    TaskActivity::Finish => break,
                 },
-                Ok(None) => {}
+                Ok(None) => break,
                 Err(_) => {
                     if check_liquidations && !liquidation_checked {
                         if let Some(block) = block_number {
@@ -404,7 +406,6 @@ impl<
                     if let Ok(logs) = result {
                         DataFrom::Log(logs)
                     } else {
-                        debounce_liquidation.abort();
                         break 'filter;
                     }
                 } else {
@@ -522,13 +523,17 @@ impl<
                             data,
                             ..Default::default()
                         });
-
+                        if debounce_tx.send(TaskActivity::Finish).await.is_err() {
+                            debounce_liquidation.abort();
+                        }
                         return Err(ProtocolError::SignerMiddlewareError(e));
                     }
                 },
             };
         }
-        debounce_liquidation.abort();
+        if debounce_tx.send(TaskActivity::Finish).await.is_err() {
+            debounce_liquidation.abort();
+        }
         Ok(())
     }
 
