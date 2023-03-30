@@ -434,10 +434,10 @@ impl<
                     if last_block >= latest_block {
                         first_block = latest_block;
                         getting_logs = false;
-                        debounce_tx
+                        let _ = debounce_tx
                             .send(TaskActivity::UpdateAll(Some(latest_block)))
-                            .await
-                            .unwrap();
+                            .await;
+                        let _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
                         let backup = serde_json::to_vec(&me.data).unwrap();
                         cacache::write(
                             ProtocolData::cache_path(me.chain_id),
