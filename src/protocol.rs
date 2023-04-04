@@ -491,7 +491,7 @@ impl<
                                 }
                                 Err(e) => {
                                     protocol_error_breadcrumb(&e);
-                                    break 'filter;
+                                    panic!("Protocol error");
                                 }
                             };
                         }
@@ -526,7 +526,7 @@ impl<
                         if debounce_tx.send(TaskActivity::Finish).await.is_err() {
                             debounce_liquidation.abort();
                         }
-                        return Err(ProtocolError::SignerMiddlewareError(e));
+                        panic!("Connection error");
                     }
                 },
             };
