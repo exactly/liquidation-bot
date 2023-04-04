@@ -404,7 +404,7 @@ impl<
             );
 
             match func.estimate_gas().await {
-                Ok(gas) => gas,
+                Ok(gas) => Some(gas),
                 Err(err) => {
                     let mut data = BTreeMap::new();
                     data.insert("message".to_string(), Value::String(err.to_string()));
@@ -425,12 +425,6 @@ impl<
             }
         } else {
             return None;
-        };
-
-        let gas_used = if self.network.can_estimate_gas() {
-            Some(gas_used)
-        } else {
-            None
         };
 
         Some((

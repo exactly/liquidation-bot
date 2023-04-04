@@ -11,7 +11,6 @@ pub struct NetworkStatus {
 
 pub trait NetworkActions {
     fn tx_cost(&self, data: &Network, status: NetworkStatus) -> U256;
-    fn can_estimate_gas(&self) -> bool;
 }
 
 pub struct Network {
@@ -37,14 +36,9 @@ impl Network {
         self.gas_used
     }
 
-    pub fn can_estimate_gas(&self) -> bool {
-        self.actions.can_estimate_gas()
-    }
-
     fn get_network_from(config: &Config) -> Box<dyn NetworkActions + Send + Sync> {
         match config.chain_id {
-            1 => Self::get_network::<Mainnet>(),
-            5 => Self::get_network::<Goerli>(),
+            1 | 5 => Self::get_network::<Ethereum>(),
             10 => Box::new(Optimism {
                 l1_gas_used: config.l1_gas_used,
                 l1_gas_price: config.l1_gas_price,
@@ -60,7 +54,7 @@ impl Network {
 }
 
 #[derive(Default)]
-struct Mainnet;
+struct Ethereum;
 
 #[derive(Default)]
 struct Optimism {
@@ -68,34 +62,15 @@ struct Optimism {
     l1_gas_price: U256,
 }
 
-#[derive(Default)]
-struct Goerli;
-
-impl NetworkActions for Mainnet {
+impl NetworkActions for Ethereum {
     fn tx_cost(&self, data: &Network, status: NetworkStatus) -> U256 {
         (status.gas_price.unwrap_or(data.gas_price) * status.gas_used.unwrap_or(data.gas_used))
             .mul_wad_down(status.eth_price)
-    }
-    fn can_estimate_gas(&self) -> bool {
-        true
     }
 }
 
 impl NetworkActions for Optimism {
     fn tx_cost(&self, _: &Network, status: NetworkStatus) -> U256 {
         (self.l1_gas_price * self.l1_gas_used).mul_wad_down(status.eth_price)
-    }
-    fn can_estimate_gas(&self) -> bool {
-        false
-    }
-}
-
-impl NetworkActions for Goerli {
-    fn tx_cost(&self, data: &Network, status: NetworkStatus) -> U256 {
-        (status.gas_price.unwrap_or(data.gas_price) * status.gas_used.unwrap_or(data.gas_used))
-            .mul_wad_down(status.eth_price)
-    }
-    fn can_estimate_gas(&self) -> bool {
-        true
     }
 }
