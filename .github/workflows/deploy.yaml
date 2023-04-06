@@ -1,4 +1,7 @@
 on:
+  workflow_run:
+    workflows: [.github/workflows/build.yaml]
+    types: [completed]
   workflow_dispatch:
     inputs:
       environment:
@@ -7,7 +10,7 @@ on:
         type: environment
 jobs:
   deploy:
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment || 'goerli' }}
     runs-on: ubuntu-latest
     env:
       IMAGE_TAG: ${{ format('gcr.io/exactly-liq-bot/liquidation-bot:{0}', github.sha) }}
@@ -19,4 +22,4 @@ jobs:
         with:
           cluster_name: liquidation-bot
           location: us-central1
-      - run: kubectl set image deployment/${{ inputs.environment }} liquidation-bot=${{ env.IMAGE_TAG }}
+      - run: kubectl set image deployment/${{ inputs.environment || 'goerli' }} liquidation-bot=${{ env.IMAGE_TAG }}
