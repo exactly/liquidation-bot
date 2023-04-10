@@ -322,6 +322,7 @@ impl<
         service: Arc<Mutex<Self>>,
         mut debounce_rx: Receiver<TaskActivity>,
     ) {
+        info!("Start debounce liquidations");
         let mut block_number = None;
         let mut check_liquidations = false;
         let mut liquidation_checked = false;
@@ -364,7 +365,9 @@ impl<
     {
         const PAGE_SIZE: u64 = 5000;
 
+        info!("Creating channels for liquidation events");
         let (debounce_tx, debounce_rx) = mpsc::channel(10);
+        info!("Spawning liquidation event debouncer");
         let debounce_liquidation = tokio::spawn(Self::debounce_liquidations(
             Arc::clone(&service),
             debounce_rx,
@@ -378,6 +381,7 @@ impl<
         }
         let file = File::create("data.log").unwrap();
         let mut writer = BufWriter::new(file);
+        info!("Getting first block");
         let mut first_block = service.lock().await.data.last_sync.0;
         let mut last_block = first_block + PAGE_SIZE;
         let mut latest_block = U64::zero();
@@ -385,7 +389,9 @@ impl<
         'filter: loop {
             let client;
             let result: DataFrom<M, S> = {
+                info!("locking service to get logs or subscribe");
                 let service_unlocked = service.lock().await;
+                info!("locked");
                 client = Arc::clone(&service_unlocked.client);
                 if latest_block.is_zero() {
                     let gbn = client.get_block_number().await;
@@ -402,16 +408,21 @@ impl<
                 );
                 if getting_logs {
                     filter = filter.to_block(last_block);
+                    info!("getting to logs");
                     let result = client.get_logs(&filter).await;
                     if let Ok(logs) = result {
+                        info!("get result from logs {:#?}", logs.len());
                         DataFrom::Log(logs)
                     } else {
+                        info!("result with no logs");
                         break 'filter;
                     }
                 } else {
+                    info!("Subscribing to logs");
                     DataFrom::Stream(client.subscribe_logs(&filter).await)
                 }
             };
+            info!("got result");
             match result {
                 DataFrom::Log(logs) => {
                     _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
