@@ -12,12 +12,11 @@ COPY deployments deployments
 COPY src src
 COPY lib lib
 
-RUN rustup component add rustfmt
-RUN rustup component add clippy
+RUN rustup component add rustfmt clippy
 
-RUN cargo fmt --check
-RUN cargo clippy -- -D warnings
-RUN cargo build --release
+RUN cargo fmt --check \
+ && cargo clippy -- -D warnings \
+ && cargo build --release
 
 FROM debian:stable-slim
 
