@@ -2187,11 +2187,13 @@ dependencies = [
  "log",
  "pin-project-lite",
  "pretty_env_logger",
+ "reqwest",
  "sentry",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
+ "url",
 ]
 
 [[package]]
