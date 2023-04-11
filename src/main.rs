@@ -9,6 +9,7 @@ use ethers::prelude::k256::ecdsa::SigningKey;
 use ethers::prelude::{Provider, Signer, SignerMiddleware, Wallet, Ws};
 use ethers::providers::Http;
 use eyre::Result;
+use url::Url;
 
 mod account;
 mod config;
@@ -56,8 +57,14 @@ async fn connect_ws(provider: &str) -> Result<ConnectResult> {
     Ok(ConnectResult::Ws(provider))
 }
 
-async fn connect_https(provider: &str) -> Result<ConnectResult> {
-    let provider = Provider::<Http>::try_from(provider)?;
+async fn connect_https(provider_address: &str) -> Result<ConnectResult> {
+    let url = Url::parse(provider_address)?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(60))
+        .build()?;
+    let http_provider = Http::new_with_client(url, client);
+    let provider = Provider::new(http_provider);
     Ok(ConnectResult::Https(provider))
 }
 
