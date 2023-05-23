@@ -13,7 +13,7 @@ const INTERVAL: u32 = 4 * 7 * 86_400;
 
 abigen!(
     ERC20,
-    "node_modules/@exactly-protocol/protocol/deployments/goerli/DAI.json",
+    "node_modules/@exactly/protocol/deployments/goerli/DAI.json",
     event_derives(serde::Deserialize, serde::Serialize)
 );
 
