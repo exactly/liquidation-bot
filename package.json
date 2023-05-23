@@ -1,6 +1,6 @@
 {
   "name": "@exactly/liquidation-bot",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "private": true,
   "scripts": {
     "version": "changeset version && node .changeset/cargo.js && npm install --legacy-peer-deps --package-lock-only && git commit --all --amend --no-edit",
