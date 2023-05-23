@@ -28,6 +28,6 @@ WORKDIR /liq-bot
 
 COPY --from=builder /liq-bot/target/release/liq-bot .
 COPY --from=builder /liq-bot/deployments deployments
-COPY --from=builder /liq-bot/node_modules/@exactly-protocol/protocol/deployments node_modules/@exactly-protocol/protocol/deployments
+COPY --from=builder /liq-bot/node_modules/@exactly/protocol/deployments node_modules/@exactly/protocol/deployments
 
 ENTRYPOINT [ "/liq-bot/liq-bot" ]

@@ -14,6 +14,7 @@ use crate::generate_abi::MemberAddedFilter;
 use crate::generate_abi::MemberRemovedFilter;
 use crate::generate_abi::PostTotalSharesFilter;
 use crate::generate_abi::QuorumChangedFilter;
+use crate::generate_abi::RewardsControllerSetFilter;
 use crate::generate_abi::{
     auditor::{
         AdminChangedFilter, InitializedFilter, RoleAdminChangedFilter, RoleGrantedFilter,
@@ -272,6 +273,7 @@ impl EthLogDecode for ExactlyEvents {
         map_filter!(QuorumChangedFilter, exactly_event, log);
         map_filter!(RecoverToVaultFilter, exactly_event, log);
         map_filter!(ScriptResultFilter, exactly_event, log);
+        map_filter!(RewardsControllerSetFilter, exactly_event, log);
 
         let ignored_events: Vec<H256> = [
             "0xe8ec50e5150ae28ae37e493ff389ffab7ffaec2dc4dccfca03f12a3de29d12b2",

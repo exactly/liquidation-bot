@@ -230,12 +230,12 @@ impl<
         Previewer<SignerMiddleware<M, S>>,
     ) {
         let (auditor_address, _, deployed_block) = Protocol::<M, W, S>::parse_abi(&format!(
-            "node_modules/@exactly-protocol/protocol/deployments/{}/Auditor.json",
+            "node_modules/@exactly/protocol/deployments/{}/Auditor.json",
             config.chain_id_name
         ));
 
         let (previewer_address, _, _) = Protocol::<M, W, S>::parse_abi(&format!(
-            "node_modules/@exactly-protocol/protocol/deployments/{}/Previewer.json",
+            "node_modules/@exactly/protocol/deployments/{}/Previewer.json",
             config.chain_id_name
         ));
 
@@ -253,7 +253,7 @@ impl<
             Self::get_contracts(Arc::clone(&client), config).await;
 
         let (market_weth_address, _, _) = Self::parse_abi(&format!(
-            "node_modules/@exactly-protocol/protocol/deployments/{}/MarketWETH.json",
+            "node_modules/@exactly/protocol/deployments/{}/MarketWETH.json",
             config.chain_id_name
         ));
 
