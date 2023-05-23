@@ -2176,7 +2176,7 @@ checksum = "d59d8c75012853d2e872fb56bc8a2e53718e2cafe1a4c823143141c6d90c322f"
 
 [[package]]
 name = "liq-bot"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "cacache",
  "dotenv",

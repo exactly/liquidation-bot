@@ -1,8 +1,11 @@
 [package]
 name = "liq-bot"
-version = "0.1.18"
+version = "0.1.19"
 license = "MIT"
-authors = ["Rodrigo Bronzelle <bronzelle@gmail.com>", "danilo neves cruz <cruzdanilo@gmail.com>"]
+authors = [
+    "Rodrigo Bronzelle <bronzelle@gmail.com>",
+    "danilo neves cruz <cruzdanilo@gmail.com>",
+]
 edition = "2021"
 default-run = "liq-bot"
 
