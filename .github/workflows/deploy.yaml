@@ -12,6 +12,7 @@ jobs:
   deploy:
     environment: ${{ inputs.environment || 'goerli' }}
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     env:
       IMAGE_TAG: ${{ format('gcr.io/exactly-liq-bot/liquidation-bot:{0}', github.sha) }}
     steps:
