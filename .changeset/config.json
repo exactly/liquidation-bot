@@ -3,5 +3,6 @@
   "changelog": "@changesets/cli/changelog",
   "baseBranch": "main",
   "access": "public",
+  "privatePackages": { "version": true, "tag": true },
   "commit": "./commit.js"
 }
