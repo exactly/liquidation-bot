@@ -1385,7 +1385,7 @@ impl<
                         eth_price: self.data.markets[&self.data.market_weth_address].price,
                     },
                 );
-                if profitable {
+                if profitable || self.config.liquidate_unprofitable {
                     liquidations.insert(*address, (account.clone(), repay));
                 } else {
                     liquidation::gen_liq_breadcrumb(account, &repay, &repay_settings);
