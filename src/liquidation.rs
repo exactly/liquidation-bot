@@ -233,6 +233,7 @@ impl<
             };
             gen_liq_breadcrumb(account, repay, &repay_settings);
             if will_revert {
+                println!("repay data: {:#?}", repay);
                 error!("Liquidation would revert - not sent");
                 return Ok(());
             }
@@ -407,7 +408,7 @@ impl<
                 repay_settings.pair_fee,
                 repay_settings.fee,
             );
-
+            println!("func: {:#?}", func);
             match func.estimate_gas().await {
                 Ok(gas) => Some(gas),
                 Err(err) => {
@@ -420,6 +421,7 @@ impl<
                         data,
                         ..Default::default()
                     });
+                    println!("error estimating gas: {:?}", err);
                     return Some((
                         (false, U256::zero(), U256::zero()),
                         repay_settings,
@@ -530,16 +532,51 @@ impl<
         token_pairs: &HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>,
         tokens: &HashSet<Address>,
     ) -> (Address, u32, u32) {
+        println!("coins 1");
+        let coins: HashMap<Address, String> = HashMap::from([
+            (
+                Address::from_str("0x4200000000000000000000000000000000000006").unwrap(),
+                "ETH".to_string(),
+            ),
+            (
+                Address::from_str("0x4200000000000000000000000000000000000042").unwrap(),
+                "OP".to_string(),
+            ),
+            (
+                Address::from_str("0x7F5c764cBc14f9669B88837ca1490cCa17c31607").unwrap(),
+                "USDC".to_string(),
+            ),
+            (
+                Address::from_str("0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1").unwrap(),
+                "DAI".to_string(),
+            ),
+            (
+                Address::from_str("0x1f32b1c2345538c0c6f582fcb022739c4a194ebb").unwrap(),
+                "wstETH".to_string(),
+            ),
+            (
+                Address::from_str("0x68f180fcCe6836688e9084f035309E29Bf0A2095").unwrap(),
+                "BTC".to_string(),
+            ),
+        ]);
+        println!("coins 2");
         let collateral = repay.collateral_asset_address;
         let repay = repay.repay_asset_address;
 
         let mut lowest_fee = u32::MAX;
         let mut pair_contract = Address::zero();
-
+        println!("collateral: {:#?}", collateral);
+        println!("repay: {:#?}", repay);
+        println!(
+            "collateral: {}, repay: {}",
+            coins[&collateral], coins[&repay]
+        );
+        println!("asdf");
         if collateral != repay {
             if let Some(pair) = token_pairs.get(&ordered_addresses(collateral, repay)) {
                 return (Address::zero(), pair.peek().unwrap().0, 0);
             } else {
+                println!("pair not found");
                 let (route, _) = token_pairs.iter().fold(
                     (Address::zero(), u32::MAX),
                     |(address, lowest_fee), ((token0, token1), pair_fee)| {
@@ -550,11 +587,15 @@ impl<
                         } else {
                             return (address, lowest_fee);
                         };
+                        println!("route: {}", coins[route]);
                         if let Some(fee) = token_pairs.get(&ordered_addresses(collateral, *route)) {
+                            println!("found route");
                             let total_fee = pair_fee.peek().unwrap().0 + fee.peek().unwrap().0;
                             if total_fee < lowest_fee {
                                 return (*route, total_fee);
                             }
+                        } else {
+                            println!("route not found");
                         }
                         (address, lowest_fee)
                     },

@@ -18,9 +18,9 @@ RUN cargo fmt --check \
  && cargo clippy -- -D warnings \
  && cargo build --release
 
-FROM debian:stable-slim
+FROM debian:bullseye-slim
 
-RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates \
+RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates openssl \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 

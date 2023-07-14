@@ -735,7 +735,7 @@ impl<
             }
 
             ExactlyEvents::MarketListed(data) => {
-                let mut market = self
+                let market = self
                     .data
                     .markets
                     .entry(data.market)
@@ -811,7 +811,7 @@ impl<
             }
 
             ExactlyEvents::InterestRateModelSet(data) => {
-                let mut market = self.data.markets.get_mut(&meta.address).unwrap();
+                let market = self.data.markets.get_mut(&meta.address).unwrap();
                 market.interest_rate_model = data.interest_rate_model;
                 let irm =
                     InterestRateModel::new(market.interest_rate_model, Arc::clone(&self.client));
