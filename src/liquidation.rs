@@ -237,6 +237,11 @@ impl<
                 return Ok(());
             }
 
+            println!("profitable: {}", profitable);
+            println!(
+                "self.liquidate_unprofitable: {}",
+                self.liquidate_unprofitable
+            );
             if !profitable && !self.liquidate_unprofitable {
                 gen_liq_breadcrumb(account, repay, &repay_settings);
                 warn!(

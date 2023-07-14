@@ -27,6 +27,7 @@ pub struct Config {
     pub gas_used: U256,
     pub l1_gas_price: U256,
     pub l1_gas_used: U256,
+    pub page_size: u64,
 }
 
 impl Default for Config {
@@ -149,6 +150,11 @@ impl Default for Config {
         }))
         .expect("L1_GAS_USED is not number");
 
+        let page_size = env::var("PAGE_SIZE")
+            .unwrap_or_else(|_| "5000".into())
+            .parse::<u64>()
+            .unwrap_or(100);
+
         Config {
             chain_id,
             chain_id_name: chain_id_name.into(),
@@ -167,6 +173,7 @@ impl Default for Config {
             gas_used,
             l1_gas_price,
             l1_gas_used,
+            page_size,
         }
     }
 }

@@ -364,7 +364,7 @@ impl<
     where
         <M as Middleware>::Provider: PubsubClient,
     {
-        const PAGE_SIZE: u64 = 5000;
+        let page_size: u64 = service.lock().await.config.page_size;
 
         info!("Creating channels for liquidation events");
         let (debounce_tx, debounce_rx) = mpsc::channel(10);
@@ -384,7 +384,7 @@ impl<
         let mut writer = BufWriter::new(file);
         info!("Getting first block");
         let mut first_block = service.lock().await.data.last_sync.0;
-        let mut last_block = first_block + PAGE_SIZE;
+        let mut last_block = first_block + page_size;
         let mut latest_block = U64::zero();
         let mut getting_logs = true;
         'filter: loop {
@@ -469,10 +469,10 @@ impl<
                     } else {
                         info!("getting next page");
                         first_block = last_block + 1u64;
-                        last_block = if first_block + PAGE_SIZE > latest_block {
+                        last_block = if first_block + page_size > latest_block {
                             latest_block
                         } else {
-                            last_block + PAGE_SIZE
+                            last_block + page_size
                         };
                     }
                 }
