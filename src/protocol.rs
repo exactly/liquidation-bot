@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -114,7 +114,7 @@ struct ProtocolData {
 
 impl ProtocolData {
     fn cache_path(chain_id: u64) -> String {
-        [CACHE_PATH, chain_id.to_string().as_str()]
+        [CACHE_PATH, chain_id.to_string().as_str(), CACHE_PROTOCOL]
             .iter()
             .collect::<PathBuf>()
             .to_str()
@@ -128,20 +128,14 @@ impl ProtocolData {
         market_weth_address: Address,
         config: &Config,
     ) -> Result<ProtocolData> {
-        let protocol_data =
-            match cacache::read(ProtocolData::cache_path(config.chain_id), CACHE_PROTOCOL).await {
-                Ok(cache) => {
-                    if let Ok(protocol_data) = serde_json::from_slice::<ProtocolData>(&cache) {
-                        protocol_data
-                    } else {
-                        Self::new(auditor, deployed_block, config, market_weth_address).await?
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to load protocol data from cache: {}", e);
-                    Self::new(auditor, deployed_block, config, market_weth_address).await?
-                }
-            };
+        let Ok(file) = File::options().read(true).open(ProtocolData::cache_path(config.chain_id)) else {
+            return Self::new(auditor, deployed_block, config, market_weth_address).await;
+        };
+
+        let Ok(protocol_data) = serde_json::from_reader::<_, ProtocolData>(file) else {
+            return Self::new(auditor, deployed_block, config, market_weth_address).await
+        };
+
         Ok(protocol_data)
     }
     async fn new<M: 'static + Middleware, S: 'static + Signer>(
@@ -349,9 +343,10 @@ impl<
                     if check_liquidations && !liquidation_checked {
                         if let Some(block) = block_number {
                             info!("Locking before check liquidations for block {}", block);
-                            let lock = service.lock().await.check_liquidations(block, user).await;
+                            let me = service.lock().await;
+                            let _ = me.check_liquidations(block, user).await;
                             liquidation_checked = true;
-                            drop(lock);
+                            write_cache(me.chain_id, &me.data);
                         }
                     }
                 }
@@ -442,19 +437,6 @@ impl<
                             .send(TaskActivity::UpdateAll(Some(latest_block)))
                             .await;
                         let _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
-                        let backup = serde_json::to_vec(&me.data).unwrap();
-                        info!("writing cache");
-                        match cacache::write(
-                            ProtocolData::cache_path(me.chain_id),
-                            CACHE_PROTOCOL,
-                            &backup,
-                        )
-                        .await
-                        {
-                            Ok(_) => info!("cache written"),
-                            Err(e) => info!("error writing cache {:?}", e),
-                        }
-                        info!("cache written");
                     } else {
                         info!("getting next page");
                         first_block = last_block + 1u64;
@@ -489,14 +471,6 @@ impl<
                                                 .send(TaskActivity::StartCheckLiquidation)
                                                 .await;
                                         }
-                                        let backup = serde_json::to_vec(&me.data).unwrap();
-                                        cacache::write(
-                                            ProtocolData::cache_path(me.chain_id),
-                                            CACHE_PROTOCOL,
-                                            &backup,
-                                        )
-                                        .await
-                                        .unwrap();
                                     }
                                 }
                                 Err(e) => {
@@ -1722,7 +1696,6 @@ impl<
             }
         }
         if !success {
-            let _ = cacache::remove(ProtocolData::cache_path(self.chain_id), CACHE_PROTOCOL).await;
             let mut data = BTreeMap::new();
             data.insert("block".to_string(), Value::Number(block.as_u64().into()));
             data.insert(
@@ -2209,6 +2182,25 @@ impl<
             math::WAD * adjusted_collateral / adjusted_debt
         };
         Ok((hf, adjusted_collateral, adjusted_debt, repay))
+    }
+}
+
+fn remove_cache(chain_id: u64) {
+    let _ = fs::remove_file(ProtocolData::cache_path(chain_id));
+}
+
+fn write_cache(chain_id: u64, data: &ProtocolData) {
+    remove_cache(chain_id);
+    if let Ok(file) = File::options()
+        .write(true)
+        .create(true)
+        .open(ProtocolData::cache_path(chain_id))
+    {
+        let r = serde_json::to_writer(file, data);
+        match r {
+            Ok(_) => println!("cache logs written"),
+            Err(e) => println!("error writing cache logs: {:?}", e),
+        }
     }
 }
 
