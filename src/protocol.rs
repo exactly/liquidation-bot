@@ -20,7 +20,7 @@ use ethers::prelude::{
     Address, EthLogDecode, LogMeta, Middleware, Multicall, Signer, SignerMiddleware, U256, U64,
 };
 use ethers::prelude::{Log, MulticallVersion, PubsubClient};
-use ethers::providers::SubscriptionStream;
+use ethers::providers::{MiddlewareError, SubscriptionStream};
 use ethers::types::H256;
 use eyre::{eyre, Report, Result};
 use log::{info, warn};
@@ -321,7 +321,7 @@ impl<
         let mut liquidation_checked = false;
         let mut user = None;
         loop {
-            let d = Duration::from_millis(2_000);
+            let d = Duration::from_millis(5_000);
             match time::timeout(d, debounce_rx.recv()).await {
                 Ok(Some(activity)) => match activity {
                     TaskActivity::StartCheckLiquidation => check_liquidations = true,
@@ -399,10 +399,21 @@ impl<
                 if getting_logs {
                     filter = filter.to_block(last_block);
                     let result = client.get_logs(&filter).await;
-                    if let Ok(logs) = result {
-                        DataFrom::Log(logs)
-                    } else {
-                        break 'filter;
+                    match result {
+                        Ok(logs) => {
+                            DataFrom::Log(logs)
+                        }
+                        Err(e) => {
+                            if let SignerMiddlewareError::MiddlewareError(error) = e {
+                                if let Some(rpc) = error.as_error_response() {
+                                    if rpc.message.contains("Query timeout exceeded") {
+                                        last_block = (first_block + last_block) / 2;
+                                        continue;
+                                    }
+                                }
+                            }
+                            break 'filter;
+                        }
                     }
                 } else {
                     DataFrom::Stream(client.subscribe_logs(&filter).await)
