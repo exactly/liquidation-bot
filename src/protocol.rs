@@ -461,16 +461,14 @@ impl<
                                             .await;
                                         first_block = me.data.last_sync.0;
                                         continue 'filter;
+                                    } else if me.wait_for_final_event {
+                                        _ = debounce_tx
+                                            .send(TaskActivity::StopCheckLiquidation)
+                                            .await;
                                     } else {
-                                        if me.wait_for_final_event {
-                                            _ = debounce_tx
-                                                .send(TaskActivity::StopCheckLiquidation)
-                                                .await;
-                                        } else {
-                                            _ = debounce_tx
-                                                .send(TaskActivity::StartCheckLiquidation)
-                                                .await;
-                                        }
+                                        _ = debounce_tx
+                                            .send(TaskActivity::StartCheckLiquidation)
+                                            .await;
                                     }
                                 }
                                 Err(e) => {
