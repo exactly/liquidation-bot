@@ -1346,7 +1346,7 @@ impl<
                 info!("{:<20?}: {:>28}", address, hf);
             }
 
-            if hf < math::WAD
+            if hf < math::RECOVERY_THRESHOLD
                 && repay.total_adjusted_debt != U256::zero()
                 && !self.config.simulation
             {

@@ -296,7 +296,7 @@ impl<
                 .call()
                 .await?;
             let hf = adjusted_collateral.div_wad_down(adjusted_debt);
-            if hf < math::WAD {
+            if hf < math::RECOVERY_THRESHOLD {
                 info!("hf        : {:#?}", hf);
                 info!("collateral: {:#?}", adjusted_collateral);
                 info!("debt      : {:#?}", adjusted_debt);
@@ -379,8 +379,8 @@ impl<
             return None;
         }
         let hf = adjusted_collateral.div_wad_down(adjusted_debt);
-        if hf > math::WAD {
-            info!("healthy");
+        if hf > math::RECOVERY_THRESHOLD {
+            info!("in recovery");
             return None;
         }
         let timestamp = SystemTime::now()

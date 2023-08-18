@@ -4,6 +4,7 @@ pub mod math {
     use ethers::types::U256;
 
     pub const WAD: U256 = make_u256(1_000_000_000_000_000_000u64);
+    pub const RECOVERY_THRESHOLD: U256 = WAD;
 
     pub const fn make_u256(x: u64) -> U256 {
         U256([x, 0, 0, 0])
