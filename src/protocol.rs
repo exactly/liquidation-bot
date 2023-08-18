@@ -344,9 +344,9 @@ impl<
                         if let Some(block) = block_number {
                             info!("Locking before check liquidations for block {}", block);
                             let me = service.lock().await;
+                            write_cache(me.chain_id, &me.data);
                             let _ = me.check_liquidations(block, user).await;
                             liquidation_checked = true;
-                            write_cache(me.chain_id, &me.data);
                         }
                     }
                 }
@@ -378,6 +378,7 @@ impl<
         let mut last_block = first_block + page_size;
         let mut latest_block = U64::zero();
         let mut getting_logs = true;
+        let mut last_block_cached = first_block;
         'filter: loop {
             let client;
             let result: DataFrom<M, S> = {
@@ -422,9 +423,7 @@ impl<
             match result {
                 DataFrom::Log(logs) => {
                     _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
-                    info!("locking service to handle logs");
                     let mut me = service.lock().await;
-                    info!("handling logs");
                     for log in logs {
                         let status = me.handle_log(log, &debounce_tx, &mut writer).await;
                         match status {
@@ -440,7 +439,10 @@ impl<
                             }
                         };
                     }
-                    info!("logs handled");
+                    if last_block - last_block_cached > U64::from(420 * page_size) {
+                        last_block_cached = last_block;
+                        write_cache(me.chain_id, &me.data);
+                    }
                     if last_block >= latest_block {
                         first_block = latest_block;
                         getting_logs = false;
@@ -449,7 +451,6 @@ impl<
                             .await;
                         let _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
                     } else {
-                        info!("getting next page");
                         first_block = last_block + 1u64;
                         last_block = if first_block + page_size > latest_block {
                             latest_block
@@ -2207,8 +2208,8 @@ fn write_cache(chain_id: u64, data: &ProtocolData) {
     {
         let r = serde_json::to_writer(file, data);
         match r {
-            Ok(_) => println!("cache logs written"),
-            Err(e) => println!("error writing cache logs: {:?}", e),
+            Ok(_) => info!("cache logs written"),
+            Err(e) => info!("error writing cache logs: {:?}", e),
         }
     }
 }
