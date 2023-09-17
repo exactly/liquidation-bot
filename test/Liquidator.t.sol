@@ -2,9 +2,9 @@
 pragma solidity 0.8.17;
 
 import { Test, stdJson } from "forge-std/Test.sol";
-import { Market } from "@exactly-protocol/protocol/contracts/Market.sol";
-import { Auditor } from "@exactly-protocol/protocol/contracts/Auditor.sol";
-import { MockPriceFeed } from "@exactly-protocol/protocol/contracts/mocks/MockPriceFeed.sol";
+import { Market } from "@exactly/protocol/contracts/Market.sol";
+import { Auditor } from "@exactly/protocol/contracts/Auditor.sol";
+import { MockPriceFeed } from "@exactly/protocol/contracts/mocks/MockPriceFeed.sol";
 import { Liquidator, IMarket, ERC20, ISwapRouter, PoolAddress } from "../contracts/Liquidator.sol";
 
 contract LiquidatorTest is Test {
@@ -14,9 +14,9 @@ contract LiquidatorTest is Test {
   address internal constant BOB = address(0x069);
 
   Liquidator internal liquidator;
-  Market internal marketDAI;
+  Market internal marketWETH;
   Market internal marketUSDC;
-  Market internal marketWBTC;
+  Market internal marketOP;
   Market internal marketwstETH;
   Auditor internal auditor;
   address internal timelock;
@@ -24,26 +24,27 @@ contract LiquidatorTest is Test {
   ERC20 internal dai;
   ERC20 internal weth;
   ERC20 internal wstETH;
-  ERC20 internal wbtc;
+  ERC20 internal op;
 
   function setUp() public {
+    vm.createSelectFork(vm.envString("OPTIMISM_NODE"), 109_683_846);
+
     liquidator = new Liquidator(
       address(this),
       getAddress("UniswapV3Factory", ""),
       ISwapRouter(getAddress("UniswapV3Router", ""))
     );
 
-    dai = ERC20(getAddress("DAI", "node_modules/@exactly-protocol/protocol/"));
-    usdc = ERC20(getAddress("USDC", "node_modules/@exactly-protocol/protocol/"));
-    weth = ERC20(getAddress("WETH", "node_modules/@exactly-protocol/protocol/"));
-    wbtc = ERC20(getAddress("WBTC", "node_modules/@exactly-protocol/protocol/"));
-    wstETH = ERC20(getAddress("wstETH", "node_modules/@exactly-protocol/protocol/"));
-    auditor = Auditor(getAddress("Auditor", "node_modules/@exactly-protocol/protocol/"));
-    timelock = getAddress("TimelockController", "node_modules/@exactly-protocol/protocol/");
-    marketDAI = Market(getAddress("MarketDAI", "node_modules/@exactly-protocol/protocol/"));
-    marketUSDC = Market(getAddress("MarketUSDC", "node_modules/@exactly-protocol/protocol/"));
-    marketWBTC = Market(getAddress("MarketWBTC", "node_modules/@exactly-protocol/protocol/"));
-    marketwstETH = Market(getAddress("MarketwstETH", "node_modules/@exactly-protocol/protocol/"));
+    usdc = ERC20(getAddress("USDC", "node_modules/@exactly/protocol/"));
+    weth = ERC20(getAddress("WETH", "node_modules/@exactly/protocol/"));
+    op = ERC20(getAddress("OP", "node_modules/@exactly/protocol/"));
+    wstETH = ERC20(getAddress("wstETH", "node_modules/@exactly/protocol/"));
+    auditor = Auditor(getAddress("Auditor", "node_modules/@exactly/protocol/"));
+    timelock = getAddress("TimelockController", "node_modules/@exactly/protocol/");
+    marketWETH = Market(getAddress("MarketWETH", "node_modules/@exactly/protocol/"));
+    marketUSDC = Market(getAddress("MarketUSDC", "node_modules/@exactly/protocol/"));
+    marketOP = Market(getAddress("MarketOP", "node_modules/@exactly/protocol/"));
+    marketwstETH = Market(getAddress("MarketwstETH", "node_modules/@exactly/protocol/"));
 
     vm.label(ALICE, "alice");
     if (address(dai) != address(0)) {
@@ -55,10 +56,10 @@ contract LiquidatorTest is Test {
   }
 
   function testMultiMarketLiquidation() external {
-    deal(address(dai), BOB, 100_000 ether);
+    deal(address(weth), BOB, 61.34 ether);
     vm.startPrank(BOB);
-    dai.approve(address(marketDAI), type(uint256).max);
-    marketDAI.deposit(100_000 ether, BOB);
+    weth.approve(address(marketWETH), type(uint256).max);
+    marketWETH.deposit(61.34 ether, BOB);
     vm.stopPrank();
 
     deal(address(usdc), ALICE, 100_000e6);
@@ -66,19 +67,19 @@ contract LiquidatorTest is Test {
     usdc.approve(address(marketUSDC), type(uint256).max);
     marketUSDC.deposit(100_000e6, ALICE);
     auditor.enterMarket(marketUSDC);
-    marketDAI.borrow(70_000 ether, ALICE, ALICE);
+    marketWETH.borrow(42.9 ether, ALICE, ALICE);
     vm.stopPrank();
 
     vm.startPrank(timelock);
-    auditor.setPriceFeed(marketDAI, new MockPriceFeed(18, 0.01 ether));
+    auditor.setPriceFeed(marketWETH, new MockPriceFeed(8, 5_000e8));
     vm.stopPrank();
 
     uint256 balanceBefore = usdc.balanceOf(address(liquidator));
     liquidator.liquidate(
-      IMarket(address(marketDAI)),
+      IMarket(address(marketWETH)),
       IMarket(address(marketUSDC)),
       ALICE,
-      67_300 ether,
+      40 ether,
       address(0),
       500,
       0
@@ -87,10 +88,10 @@ contract LiquidatorTest is Test {
   }
 
   function testSingleMarketLiquidation() external {
-    deal(address(dai), BOB, 100_000 ether);
+    deal(address(weth), BOB, 61.34 ether);
     vm.startPrank(BOB);
-    dai.approve(address(marketDAI), type(uint256).max);
-    marketDAI.deposit(100_000 ether, BOB);
+    weth.approve(address(marketWETH), type(uint256).max);
+    marketWETH.deposit(61.34 ether, BOB);
     vm.stopPrank();
 
     deal(address(usdc), ALICE, 100_000e6);
@@ -98,12 +99,12 @@ contract LiquidatorTest is Test {
     usdc.approve(address(marketUSDC), type(uint256).max);
     marketUSDC.deposit(100_000e6, ALICE);
     auditor.enterMarket(marketUSDC);
-    marketDAI.borrow(70_000 ether, ALICE, ALICE);
+    marketWETH.borrow(40 ether, ALICE, ALICE);
     marketUSDC.borrow(2_000e6, ALICE, ALICE);
     vm.stopPrank();
 
     vm.startPrank(timelock);
-    auditor.setPriceFeed(marketDAI, new MockPriceFeed(18, 0.01 ether));
+    auditor.setPriceFeed(marketWETH, new MockPriceFeed(8, 7_000e8));
     vm.stopPrank();
 
     liquidator.liquidate(
@@ -111,7 +112,7 @@ contract LiquidatorTest is Test {
       IMarket(address(marketUSDC)),
       ALICE,
       2_000e6,
-      address(dai),
+      address(weth),
       500,
       0
     );
@@ -134,7 +135,7 @@ contract LiquidatorTest is Test {
     vm.stopPrank();
 
     vm.startPrank(timelock);
-    auditor.setPriceFeed(marketUSDC, new MockPriceFeed(18, 0.01 ether));
+    auditor.setPriceFeed(marketUSDC, new MockPriceFeed(8, 5e8));
     vm.stopPrank();
 
     uint256 balancewstETHBefore = wstETH.balanceOf(address(liquidator));
@@ -166,7 +167,7 @@ contract LiquidatorTest is Test {
     vm.stopPrank();
 
     vm.startPrank(timelock);
-    auditor.setPriceFeed(marketwstETH, new MockPriceFeed(18, 2 ether));
+    auditor.setPriceFeed(marketwstETH, new MockPriceFeed(8, 3_200e8));
     vm.stopPrank();
 
     uint256 balanceUSDCBefore = usdc.balanceOf(address(liquidator));
@@ -176,7 +177,7 @@ contract LiquidatorTest is Test {
       ALICE,
       20 ether,
       address(weth),
-      500,
+      100,
       500
     );
     assertGt(usdc.balanceOf(address(liquidator)), balanceUSDCBefore);
@@ -189,39 +190,39 @@ contract LiquidatorTest is Test {
     marketwstETH.deposit(100 ether, BOB);
     vm.stopPrank();
 
-    deal(address(wbtc), ALICE, 100 ether);
+    deal(address(op), ALICE, 25_000 ether);
     vm.startPrank(ALICE);
-    wbtc.approve(address(marketWBTC), type(uint256).max);
-    marketWBTC.deposit(1e8, ALICE);
-    auditor.enterMarket(marketWBTC);
+    op.approve(address(marketOP), type(uint256).max);
+    marketOP.deposit(25_000 ether, ALICE);
+    auditor.enterMarket(marketOP);
     marketwstETH.borrow(6 ether, ALICE, ALICE);
     vm.stopPrank();
 
     vm.startPrank(timelock);
-    auditor.setPriceFeed(marketWBTC, new MockPriceFeed(18, 1 ether));
+    auditor.setPriceFeed(marketOP, new MockPriceFeed(8, 0.1e8));
     vm.stopPrank();
 
-    uint256 balanceWBTCBefore = wbtc.balanceOf(address(liquidator));
+    uint256 balanceOPBefore = op.balanceOf(address(liquidator));
     liquidator.liquidate(
       IMarket(address(marketwstETH)),
-      IMarket(address(marketWBTC)),
+      IMarket(address(marketOP)),
       ALICE,
       2 ether,
       address(weth),
-      500,
-      500
+      100,
+      3000
     );
-    assertGt(wbtc.balanceOf(address(liquidator)), balanceWBTCBefore);
+    assertGt(op.balanceOf(address(liquidator)), balanceOPBefore);
   }
 
   function testSwap() external {
     deal(address(usdc), address(liquidator), 666_666e6);
-    assertEq(dai.balanceOf(address(liquidator)), 0);
+    assertEq(weth.balanceOf(address(liquidator)), 0);
     assertEq(usdc.balanceOf(address(liquidator)), 666_666e6);
 
-    liquidator.swap(usdc, 666_666e6, dai, 0, 500);
+    liquidator.swap(usdc, 666_666e6, weth, 0, 500);
 
-    assertGt(dai.balanceOf(address(liquidator)), 0);
+    assertGt(weth.balanceOf(address(liquidator)), 0);
     assertEq(usdc.balanceOf(address(liquidator)), 0);
   }
 
@@ -266,6 +267,7 @@ contract LiquidatorTest is Test {
     string memory network;
     if (block.chainid == 1) network = "mainnet";
     else if (block.chainid == 5) network = "goerli";
+    else if (block.chainid == 10) network = "optimism";
 
     addr = vm.readFile(string.concat(base, "deployments/", network, "/", name, ".json")).readAddress(".address");
     vm.label(addr, name);
