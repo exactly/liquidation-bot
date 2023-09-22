@@ -17,17 +17,24 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
   /// @dev The maximum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MAX_TICK)
   uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
-  address public immutable factory;
   ISwapRouter public immutable swapRouter;
+  address public immutable uniswapFactory;
+  IVelodromeFactory public immutable velodromeFactory;
 
   mapping(address => bool) public callers;
 
-  constructor(address owner_, address factory_, ISwapRouter swapRouter_) Auth(owner_, this) {
-    factory = factory_;
+  constructor(
+    address owner_,
+    ISwapRouter swapRouter_,
+    address uniswapFactory_,
+    IVelodromeFactory velodromeFactory_
+  ) Auth(owner_, this) {
     swapRouter = swapRouter_;
+    uniswapFactory = uniswapFactory_;
+    velodromeFactory = velodromeFactory_;
   }
 
-  function liquidate(
+  function liquidateUniswap(
     IMarket repayMarket,
     IMarket seizeMarket,
     address borrower,
@@ -73,7 +80,7 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
             })
           );
         }
-        IUniswapV3Pool(PoolAddress.computeAddress(factory, poolKey)).swap(
+        IUniswapV3Pool(PoolAddress.computeAddress(uniswapFactory, poolKey)).swap(
           address(this),
           address(repayAsset) == poolKey.token1,
           -int256(maxRepay),
@@ -93,13 +100,115 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
             fee: fee
           })
         );
-        IUniswapV3Pool(PoolAddress.computeAddress(factory, poolKey)).flash(
+        IUniswapV3Pool(PoolAddress.computeAddress(uniswapFactory, poolKey)).flash(
           address(this),
           address(repayAsset) == poolKey.token0 ? flashBorrow : 0,
           address(repayAsset) == poolKey.token1 ? flashBorrow : 0,
           data
         );
       }
+    }
+  }
+
+  function liquidateVelodrome(
+    IMarket repayMarket,
+    IMarket seizeMarket,
+    address borrower,
+    uint256 maxRepay,
+    ERC20 poolPair
+  ) external requiresAuth {
+    ERC20 repayAsset = repayMarket.asset();
+
+    if (repayAsset.balanceOf(address(this)) >= maxRepay) {
+      repayAsset.safeApprove(address(repayMarket), maxRepay);
+      repayMarket.liquidate(borrower, maxRepay, seizeMarket);
+    } else {
+      if (repayMarket != seizeMarket) {
+        if (address(poolPair) == address(0)) {
+          ERC20 seizeAsset = seizeMarket.asset();
+          address pool = velodromeFactory.getPool(repayAsset, seizeAsset, false);
+          IVelodromePool(pool).swap(
+            address(seizeAsset) > address(repayAsset) ? maxRepay : 0,
+            address(seizeAsset) < address(repayAsset) ? maxRepay : 0,
+            address(this),
+            abi.encode(
+              SwapCallbackData({
+                repayMarket: repayMarket,
+                seizeMarket: seizeMarket,
+                borrower: borrower,
+                poolPair: address(seizeAsset),
+                fee: velodromeFactory.getFee(pool, false),
+                pairFee: 0
+              })
+            )
+          );
+        } else {
+          address pool = velodromeFactory.getPool(repayAsset, poolPair, false);
+          IVelodromePool(pool).swap(
+            address(poolPair) > address(repayAsset) ? maxRepay : 0,
+            address(poolPair) < address(repayAsset) ? maxRepay : 0,
+            address(this),
+            abi.encode(
+              SwapCallbackData({
+                repayMarket: repayMarket,
+                seizeMarket: seizeMarket,
+                borrower: borrower,
+                poolPair: address(poolPair),
+                fee: 0,
+                pairFee: velodromeFactory.getFee(pool, false)
+              })
+            )
+          );
+        }
+      }
+    }
+  }
+
+  function hook(address sender, uint256 amount0Out, uint256 amount1Out, bytes calldata data) external {
+    require(sender == address(this));
+
+    SwapCallbackData memory s = abi.decode(data, (SwapCallbackData));
+    ERC20 seizeAsset = s.seizeMarket.asset();
+
+    if (s.borrower != address(0)) {
+      ERC20 repayAsset = s.repayMarket.asset();
+      require(msg.sender == velodromeFactory.getPool(repayAsset, ERC20(s.poolPair), false));
+
+      uint256 maxRepay = amount0Out == 0 ? amount1Out : amount0Out;
+      repayAsset.safeApprove(address(s.repayMarket), maxRepay);
+      s.repayMarket.liquidate(s.borrower, maxRepay, s.seizeMarket);
+
+      if (s.pairFee > 0) {
+        address pool = velodromeFactory.getPool(seizeAsset, ERC20(s.poolPair), false);
+        uint256 amount = getAmountIn(msg.sender, maxRepay, amount0Out == 0, s.pairFee);
+
+        IVelodromePool(pool).swap(
+          address(seizeAsset) > s.poolPair ? amount : 0,
+          address(seizeAsset) < s.poolPair ? amount : 0,
+          address(this),
+          abi.encode(
+            SwapCallbackData({
+              repayMarket: IMarket(address(0)),
+              seizeMarket: s.seizeMarket,
+              borrower: address(0),
+              poolPair: s.poolPair,
+              fee: velodromeFactory.getFee(pool, false),
+              pairFee: 0
+            })
+          )
+        );
+
+        ERC20(s.poolPair).safeTransfer(msg.sender, amount);
+      } else {
+        seizeAsset.transfer(msg.sender, getAmountIn(msg.sender, maxRepay, amount0Out == 0, s.fee));
+      }
+    } else {
+      require(msg.sender == velodromeFactory.getPool(ERC20(s.poolPair), seizeAsset, false));
+
+      seizeAsset.safeTransfer(
+        msg.sender,
+        getAmountIn(msg.sender, amount0Out == 0 ? amount1Out : amount0Out, amount0Out == 0, s.fee)
+      );
     }
   }
 
@@ -110,14 +219,14 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     if (s.borrower != address(0)) {
       ERC20 repayAsset = s.repayMarket.asset();
       PoolAddress.PoolKey memory poolKey = PoolAddress.getPoolKey(address(repayAsset), s.poolPair, s.fee);
-      require(msg.sender == PoolAddress.computeAddress(factory, poolKey));
+      require(msg.sender == PoolAddress.computeAddress(uniswapFactory, poolKey));
 
       uint256 maxRepay = uint256(-(address(repayAsset) == poolKey.token0 ? amount0Delta : amount1Delta));
       repayAsset.safeApprove(address(s.repayMarket), maxRepay);
       s.repayMarket.liquidate(s.borrower, maxRepay, s.seizeMarket);
       if (s.pairFee > 0) {
         PoolAddress.PoolKey memory swapPoolKey = PoolAddress.getPoolKey(address(seizeAsset), s.poolPair, s.pairFee);
-        IUniswapV3Pool(PoolAddress.computeAddress(factory, swapPoolKey)).swap(
+        IUniswapV3Pool(PoolAddress.computeAddress(uniswapFactory, swapPoolKey)).swap(
           address(this),
           address(seizeAsset) == swapPoolKey.token0,
           -int256(s.poolPair == poolKey.token0 ? amount0Delta : amount1Delta),
@@ -134,10 +243,7 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
           )
         );
 
-        ERC20(s.poolPair).safeTransfer(
-          msg.sender,
-          uint256(address(s.poolPair) == poolKey.token0 ? amount0Delta : amount1Delta)
-        );
+        ERC20(s.poolPair).safeTransfer(msg.sender, uint256(s.poolPair == poolKey.token0 ? amount0Delta : amount1Delta));
       } else {
         seizeAsset.safeTransfer(
           msg.sender,
@@ -146,7 +252,7 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
       }
     } else {
       PoolAddress.PoolKey memory swapPoolKey = PoolAddress.getPoolKey(address(seizeAsset), s.poolPair, s.pairFee);
-      require(msg.sender == PoolAddress.computeAddress(factory, swapPoolKey));
+      require(msg.sender == PoolAddress.computeAddress(uniswapFactory, swapPoolKey));
 
       seizeAsset.safeTransfer(
         msg.sender,
@@ -160,12 +266,22 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
     ERC20 repayAsset = f.repayMarket.asset();
     PoolAddress.PoolKey memory poolKey = PoolAddress.getPoolKey(address(repayAsset), f.poolPair, f.fee);
 
-    require(msg.sender == PoolAddress.computeAddress(factory, poolKey));
+    require(msg.sender == PoolAddress.computeAddress(uniswapFactory, poolKey));
 
     repayAsset.safeApprove(address(f.repayMarket), f.maxRepay);
     f.repayMarket.liquidate(f.borrower, f.maxRepay, f.seizeMarket);
 
     repayAsset.safeTransfer(msg.sender, f.flashBorrow + (address(repayAsset) == poolKey.token0 ? fee0 : fee1));
+  }
+
+  function getAmountIn(address pool, uint256 amountOut, bool isToken0, uint256 fee) internal view returns (uint256) {
+    (uint256 reserve0, uint256 reserve1, ) = IVelodromePool(pool).getReserves();
+    return
+      (
+        isToken0
+          ? (reserve0 * amountOut * 10_000) / ((reserve1 - amountOut) * (10_000 - fee))
+          : (reserve1 * amountOut * 10_000) / ((reserve0 - amountOut) * (10_000 - fee))
+      ) + 1;
   }
 
   function swap(
@@ -195,7 +311,9 @@ contract Liquidator is Auth, Authority, IUniswapV3FlashCallback, IUniswapV3SwapC
   }
 
   function canCall(address caller, address, bytes4 functionSig) external view returns (bool) {
-    return functionSig == this.liquidate.selector && callers[caller];
+    return
+      (functionSig == this.liquidateUniswap.selector || functionSig == this.liquidateVelodrome.selector) &&
+      callers[caller];
   }
 
   function addCaller(address caller) external requiresAuth {
@@ -230,6 +348,18 @@ interface IMarket {
   function asset() external view returns (ERC20);
 
   function liquidate(address borrower, uint256 maxAssets, IMarket seizeMarket) external returns (uint256 repaidAssets);
+}
+
+interface IVelodromeFactory {
+  function getPool(ERC20 tokenA, ERC20 tokenB, bool stable) external view returns (address);
+
+  function getFee(address pool, bool stable) external view returns (uint24);
+}
+
+interface IVelodromePool {
+  function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
+
+  function getReserves() external view returns (uint256 reserve0, uint256 reserve1, uint256 blockTimestampLast);
 }
 
 // https://github.com/Uniswap/v3-periphery/pull/289

@@ -5,7 +5,7 @@ import { Test, stdJson } from "forge-std/Test.sol";
 import { Market } from "@exactly/protocol/contracts/Market.sol";
 import { Auditor } from "@exactly/protocol/contracts/Auditor.sol";
 import { MockPriceFeed } from "@exactly/protocol/contracts/mocks/MockPriceFeed.sol";
-import { Liquidator, IMarket, ERC20, ISwapRouter, PoolAddress } from "../contracts/Liquidator.sol";
+import { Liquidator, IMarket, IVelodromeFactory, ERC20, ISwapRouter, PoolAddress } from "../contracts/Liquidator.sol";
 
 contract LiquidatorTest is Test {
   using stdJson for string;
@@ -31,8 +31,9 @@ contract LiquidatorTest is Test {
 
     liquidator = new Liquidator(
       address(this),
+      ISwapRouter(getAddress("UniswapV3Router", "")),
       getAddress("UniswapV3Factory", ""),
-      ISwapRouter(getAddress("UniswapV3Router", ""))
+      IVelodromeFactory(0xF1046053aa5682b4F9a81b5481394DA16BE5FF5a)
     );
 
     usdc = ERC20(getAddress("USDC", "node_modules/@exactly/protocol/"));
@@ -49,7 +50,10 @@ contract LiquidatorTest is Test {
     vm.label(ALICE, "alice");
     if (address(dai) != address(0)) {
       vm.label(
-        PoolAddress.computeAddress(liquidator.factory(), PoolAddress.getPoolKey(address(dai), address(usdc), 500)),
+        PoolAddress.computeAddress(
+          liquidator.uniswapFactory(),
+          PoolAddress.getPoolKey(address(dai), address(usdc), 500)
+        ),
         "DAI/USDC/500"
       );
     }
@@ -75,7 +79,7 @@ contract LiquidatorTest is Test {
     vm.stopPrank();
 
     uint256 balanceBefore = usdc.balanceOf(address(liquidator));
-    liquidator.liquidate(
+    liquidator.liquidateUniswap(
       IMarket(address(marketWETH)),
       IMarket(address(marketUSDC)),
       ALICE,
@@ -84,6 +88,114 @@ contract LiquidatorTest is Test {
       500,
       0
     );
+    assertGt(usdc.balanceOf(address(liquidator)), balanceBefore);
+  }
+
+  function testVelodromeMultiMarketLiquidation() external {
+    deal(address(weth), BOB, 50 ether);
+    vm.startPrank(BOB);
+    weth.approve(address(marketWETH), type(uint256).max);
+    marketWETH.deposit(50 ether, BOB);
+    vm.stopPrank();
+
+    deal(address(usdc), ALICE, 100_000e6);
+    vm.startPrank(ALICE);
+    usdc.approve(address(marketUSDC), type(uint256).max);
+    marketUSDC.deposit(100_000e6, ALICE);
+    auditor.enterMarket(marketUSDC);
+    marketWETH.borrow(20 ether, ALICE, ALICE);
+    vm.stopPrank();
+
+    vm.startPrank(timelock);
+    auditor.setPriceFeed(marketWETH, new MockPriceFeed(8, 10 ether));
+    vm.stopPrank();
+
+    uint256 balanceBefore = usdc.balanceOf(address(liquidator));
+    liquidator.liquidateVelodrome(
+      IMarket(address(marketWETH)),
+      IMarket(address(marketUSDC)),
+      ALICE,
+      10 ether,
+      ERC20(address(0))
+    );
+    assertGt(usdc.balanceOf(address(liquidator)), balanceBefore);
+  }
+
+  function testVelodromeReverseMultiMarketLiquidation() external {
+    deal(address(usdc), BOB, 100_000e6);
+    vm.startPrank(BOB);
+    usdc.approve(address(marketUSDC), type(uint256).max);
+    marketUSDC.deposit(100_000e6, BOB);
+    vm.stopPrank();
+
+    deal(address(weth), ALICE, 50 ether);
+    vm.startPrank(ALICE);
+    weth.approve(address(marketWETH), type(uint256).max);
+    marketWETH.deposit(50 ether, ALICE);
+    auditor.enterMarket(marketWETH);
+    marketUSDC.borrow(60_000e6, ALICE, ALICE);
+    vm.stopPrank();
+
+    vm.startPrank(timelock);
+    auditor.setPriceFeed(marketUSDC, new MockPriceFeed(8, 3e8));
+    vm.stopPrank();
+
+    uint256 balanceBefore = weth.balanceOf(address(liquidator));
+    liquidator.liquidateVelodrome(
+      IMarket(address(marketUSDC)),
+      IMarket(address(marketWETH)),
+      ALICE,
+      30_000e6,
+      ERC20(address(0))
+    );
+    assertGt(weth.balanceOf(address(liquidator)), balanceBefore);
+  }
+
+  function testVelodromeDoubleSwapLiquidation() external {
+    deal(address(usdc), BOB, 100_000e6);
+    vm.startPrank(BOB);
+    usdc.approve(address(marketUSDC), type(uint256).max);
+    marketUSDC.deposit(100_000e6, BOB);
+    vm.stopPrank();
+
+    deal(address(wstETH), ALICE, 100 ether);
+    vm.startPrank(ALICE);
+    wstETH.approve(address(marketwstETH), type(uint256).max);
+    marketwstETH.deposit(100 ether, ALICE);
+    auditor.enterMarket(marketwstETH);
+    marketUSDC.borrow(60_000e6, ALICE, ALICE);
+    vm.stopPrank();
+
+    vm.startPrank(timelock);
+    auditor.setPriceFeed(marketUSDC, new MockPriceFeed(8, 5e8));
+    vm.stopPrank();
+
+    uint256 balancewstETHBefore = wstETH.balanceOf(address(liquidator));
+    liquidator.liquidateVelodrome(IMarket(address(marketUSDC)), IMarket(address(marketwstETH)), ALICE, 30_000e6, weth);
+    assertGt(wstETH.balanceOf(address(liquidator)), balancewstETHBefore);
+  }
+
+  function testVelodromeReverseDoubleSwapLiquidation() external {
+    deal(address(wstETH), BOB, 50 ether);
+    vm.startPrank(BOB);
+    wstETH.approve(address(marketwstETH), type(uint256).max);
+    marketwstETH.deposit(50 ether, BOB);
+    vm.stopPrank();
+
+    deal(address(usdc), ALICE, 100_000e6);
+    vm.startPrank(ALICE);
+    usdc.approve(address(marketUSDC), type(uint256).max);
+    marketUSDC.deposit(100_000e6, ALICE);
+    auditor.enterMarket(marketUSDC);
+    marketwstETH.borrow(30 ether, ALICE, ALICE);
+    vm.stopPrank();
+
+    vm.startPrank(timelock);
+    auditor.setPriceFeed(marketUSDC, new MockPriceFeed(8, 0.2e8));
+    vm.stopPrank();
+
+    uint256 balanceBefore = usdc.balanceOf(address(liquidator));
+    liquidator.liquidateVelodrome(IMarket(address(marketwstETH)), IMarket(address(marketUSDC)), ALICE, 20 ether, weth);
     assertGt(usdc.balanceOf(address(liquidator)), balanceBefore);
   }
 
@@ -107,7 +219,7 @@ contract LiquidatorTest is Test {
     auditor.setPriceFeed(marketWETH, new MockPriceFeed(8, 7_000e8));
     vm.stopPrank();
 
-    liquidator.liquidate(
+    liquidator.liquidateUniswap(
       IMarket(address(marketUSDC)),
       IMarket(address(marketUSDC)),
       ALICE,
@@ -139,7 +251,7 @@ contract LiquidatorTest is Test {
     vm.stopPrank();
 
     uint256 balancewstETHBefore = wstETH.balanceOf(address(liquidator));
-    liquidator.liquidate(
+    liquidator.liquidateUniswap(
       IMarket(address(marketUSDC)),
       IMarket(address(marketwstETH)),
       ALICE,
@@ -171,7 +283,7 @@ contract LiquidatorTest is Test {
     vm.stopPrank();
 
     uint256 balanceUSDCBefore = usdc.balanceOf(address(liquidator));
-    liquidator.liquidate(
+    liquidator.liquidateUniswap(
       IMarket(address(marketwstETH)),
       IMarket(address(marketUSDC)),
       ALICE,
@@ -203,7 +315,7 @@ contract LiquidatorTest is Test {
     vm.stopPrank();
 
     uint256 balanceOPBefore = op.balanceOf(address(liquidator));
-    liquidator.liquidate(
+    liquidator.liquidateUniswap(
       IMarket(address(marketwstETH)),
       IMarket(address(marketOP)),
       ALICE,
@@ -244,7 +356,7 @@ contract LiquidatorTest is Test {
 
     vm.prank(ALICE);
     vm.expectRevert("UNAUTHORIZED");
-    liquidator.liquidate(IMarket(address(0)), IMarket(address(0)), address(0), 0, address(0), 0, 0);
+    liquidator.liquidateUniswap(IMarket(address(0)), IMarket(address(0)), address(0), 0, address(0), 0, 0);
 
     liquidator.addCaller(ALICE);
 
@@ -258,7 +370,7 @@ contract LiquidatorTest is Test {
 
     vm.prank(ALICE);
     vm.expectRevert();
-    liquidator.liquidate(IMarket(address(0)), IMarket(address(0)), address(0), 0, address(0), 0, 0);
+    liquidator.liquidateUniswap(IMarket(address(0)), IMarket(address(0)), address(0), 0, address(0), 0, 0);
   }
 
   function getAddress(string memory name, string memory base) internal returns (address addr) {
