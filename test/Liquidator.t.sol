@@ -116,7 +116,9 @@ contract LiquidatorTest is Test {
       IMarket(address(marketUSDC)),
       ALICE,
       10 ether,
-      ERC20(address(0))
+      ERC20(address(0)),
+      false,
+      false
     );
     assertGt(usdc.balanceOf(address(liquidator)), balanceBefore);
   }
@@ -146,7 +148,9 @@ contract LiquidatorTest is Test {
       IMarket(address(marketWETH)),
       ALICE,
       30_000e6,
-      ERC20(address(0))
+      ERC20(address(0)),
+      false,
+      false
     );
     assertGt(weth.balanceOf(address(liquidator)), balanceBefore);
   }
@@ -171,7 +175,15 @@ contract LiquidatorTest is Test {
     vm.stopPrank();
 
     uint256 balancewstETHBefore = wstETH.balanceOf(address(liquidator));
-    liquidator.liquidateVelodrome(IMarket(address(marketUSDC)), IMarket(address(marketwstETH)), ALICE, 30_000e6, weth);
+    liquidator.liquidateVelodrome(
+      IMarket(address(marketUSDC)),
+      IMarket(address(marketwstETH)),
+      ALICE,
+      30_000e6,
+      weth,
+      false,
+      false
+    );
     assertGt(wstETH.balanceOf(address(liquidator)), balancewstETHBefore);
   }
 
@@ -195,7 +207,15 @@ contract LiquidatorTest is Test {
     vm.stopPrank();
 
     uint256 balanceBefore = usdc.balanceOf(address(liquidator));
-    liquidator.liquidateVelodrome(IMarket(address(marketwstETH)), IMarket(address(marketUSDC)), ALICE, 20 ether, weth);
+    liquidator.liquidateVelodrome(
+      IMarket(address(marketwstETH)),
+      IMarket(address(marketUSDC)),
+      ALICE,
+      20 ether,
+      weth,
+      false,
+      false
+    );
     assertGt(usdc.balanceOf(address(liquidator)), balanceBefore);
   }
 
