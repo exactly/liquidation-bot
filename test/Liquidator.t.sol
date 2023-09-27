@@ -33,7 +33,7 @@ contract LiquidatorTest is Test {
       address(this),
       ISwapRouter(getAddress("UniswapV3Router", "")),
       getAddress("UniswapV3Factory", ""),
-      IVelodromeFactory(0xF1046053aa5682b4F9a81b5481394DA16BE5FF5a)
+      IVelodromeFactory(getAddress("VelodromePoolFactory", "node_modules/@exactly/protocol/"))
     );
 
     usdc = ERC20(getAddress("USDC", "node_modules/@exactly/protocol/"));
