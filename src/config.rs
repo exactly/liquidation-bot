@@ -107,7 +107,7 @@ impl Default for Config {
                         })
                         .collect()
                 })
-                .unwrap_or(HashMap::new());
+                .unwrap_or_default();
 
         let repay_offset = utils::parse_units(
             env::var("REPAY_OFFSET").unwrap_or_else(|_| "0.001".into()),

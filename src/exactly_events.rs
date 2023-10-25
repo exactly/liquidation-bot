@@ -250,7 +250,7 @@ impl EthLogDecode for ExactlyEvents {
             return Ok(ExactlyEvents::PostTotalShares(decoded));
         }
 
-        let exactly_event = ExactlyEvents::Ignore(log.topics.get(0).copied());
+        let exactly_event = ExactlyEvents::Ignore(log.topics.first().copied());
         map_filter!(
             AllowedBeaconBalanceAnnualRelativeIncreaseSetFilter,
             exactly_event,
@@ -294,11 +294,11 @@ impl EthLogDecode for ExactlyEvents {
                 .iter()
                 .any(|ignored_topic| topic == ignored_topic)
         }) {
-            return Ok(ExactlyEvents::Ignore(log.topics.get(0).copied()));
+            return Ok(ExactlyEvents::Ignore(log.topics.first().copied()));
         };
 
         missing_event_breadcrumb(log);
-        panic!("Missing event {:?}", log.topics.get(0).copied());
+        panic!("Missing event {:?}", log.topics.first().copied());
     }
 }
 

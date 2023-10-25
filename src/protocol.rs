@@ -128,12 +128,15 @@ impl ProtocolData {
         market_weth_address: Address,
         config: &Config,
     ) -> Result<ProtocolData> {
-        let Ok(file) = File::options().read(true).open(ProtocolData::cache_path(config.chain_id)) else {
+        let Ok(file) = File::options()
+            .read(true)
+            .open(ProtocolData::cache_path(config.chain_id))
+        else {
             return Self::new(auditor, deployed_block, config, market_weth_address).await;
         };
 
         let Ok(protocol_data) = serde_json::from_reader::<_, ProtocolData>(file) else {
-            return Self::new(auditor, deployed_block, config, market_weth_address).await
+            return Self::new(auditor, deployed_block, config, market_weth_address).await;
         };
 
         Ok(protocol_data)
@@ -401,9 +404,7 @@ impl<
                     filter = filter.to_block(last_block);
                     let result = client.get_logs(&filter).await;
                     match result {
-                        Ok(logs) => {
-                            DataFrom::Log(logs)
-                        }
+                        Ok(logs) => DataFrom::Log(logs),
                         Err(e) => {
                             if let SignerMiddlewareError::MiddlewareError(error) = e {
                                 if let Some(rpc) = error.as_error_response() {
@@ -2083,10 +2084,7 @@ impl<
         let Value::Object(deployment) = contract else {
             panic!("Invalid ABI");
         };
-        let (Some(contract), Some(abi)) = (
-            deployment.get("address"),
-            deployment.get("abi")
-        ) else {
+        let (Some(contract), Some(abi)) = (deployment.get("address"), deployment.get("abi")) else {
             panic!("Invalid ABI");
         };
         let (contract, abi) = (contract.clone(), abi.clone());
@@ -2303,6 +2301,6 @@ pub mod hashmap_as_vector {
         V: Deserialize<'de>,
     {
         let container: Vec<_> = serde::Deserialize::deserialize(des)?;
-        Ok(T::from_iter(container.into_iter()))
+        Ok(T::from_iter(container))
     }
 }
