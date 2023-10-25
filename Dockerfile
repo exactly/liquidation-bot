@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.2
-FROM rust:slim-bullseye AS builder
+FROM rustlang/rust:nightly-bookworm-slim AS builder
 
 RUN apt-get update && apt-get install --no-install-recommends -y pkg-config libssl-dev
 
@@ -18,7 +18,7 @@ RUN cargo fmt --check \
  && cargo clippy -- -D warnings \
  && cargo build --release
 
-FROM debian:stable-slim
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates \
  && apt-get clean \
