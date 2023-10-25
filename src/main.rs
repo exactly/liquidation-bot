@@ -113,10 +113,14 @@ async fn create_client(
     Arc<SignerMiddleware<Provider<Ws>, Wallet<SigningKey>>>,
     Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
 ) {
-    let ConnectResult::Ws(provider_ws) = retry_connect(ConnectFrom::Ws(config.rpc_provider.clone())).await else {
+    let ConnectResult::Ws(provider_ws) =
+        retry_connect(ConnectFrom::Ws(config.rpc_provider.clone())).await
+    else {
         panic!("Failed to connect to provider after {} retries", RETRIES);
     };
-    let ConnectResult::Https(provider_https) = retry_connect(ConnectFrom::Https(config.rpc_provider_relayer.clone())).await else {
+    let ConnectResult::Https(provider_https) =
+        retry_connect(ConnectFrom::Https(config.rpc_provider_relayer.clone())).await
+    else {
         panic!("Failed to connect to provider after {} retries", RETRIES);
     };
     let wallet = config.wallet.clone().with_chain_id(config.chain_id);
