@@ -40,6 +40,8 @@ use tokio::sync::Mutex;
 use tokio::time;
 use tokio_stream::StreamExt;
 
+use futures::io::AsyncWriteExt;
+
 #[cfg(feature = "complete-compare")]
 use crate::generate_abi::MarketAccount;
 
@@ -48,7 +50,7 @@ use crate::generate_abi::LiquidateFilter;
 
 pub const BASE_FEED: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
-const CACHE_PATH: &str = "cache";
+const CACHE_PATH: &str = ".cache_test";
 const CACHE_PROTOCOL: &str = "protocol";
 
 pub type TokenPairFeeMap = HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>;
@@ -128,18 +130,19 @@ impl ProtocolData {
         market_weth_address: Address,
         config: &Config,
     ) -> Result<ProtocolData> {
-        let Ok(file) = File::options()
-            .read(true)
-            .open(ProtocolData::cache_path(config.chain_id))
-        else {
-            return Self::new(auditor, deployed_block, config, market_weth_address).await;
-        };
+        //     let Ok(file) = File::options()
+        //         .read(true)
+        //         .open(ProtocolData::cache_path(config.chain_id))
+        //     else {
+        //         return Self::new(auditor, deployed_block, config, market_weth_address).await;
+        //     };
 
-        let Ok(protocol_data) = serde_json::from_reader::<_, ProtocolData>(file) else {
-            return Self::new(auditor, deployed_block, config, market_weth_address).await;
-        };
+        //     let Ok(protocol_data) = serde_json::from_reader::<_, ProtocolData>(file) else {
+        //         return Self::new(auditor, deployed_block, config, market_weth_address).await;
+        //     };
 
-        Ok(protocol_data)
+        // Ok(protocol_data)
+        Self::new(auditor, deployed_block, config, market_weth_address).await
     }
     async fn new<M: 'static + Middleware, S: 'static + Signer>(
         auditor: &Auditor<SignerMiddleware<M, S>>,
@@ -347,7 +350,6 @@ impl<
                         if let Some(block) = block_number {
                             info!("Locking before check liquidations for block {}", block);
                             let me = service.lock().await;
-                            write_cache(me.chain_id, &me.data);
                             let _ = me.check_liquidations(block, user).await;
                             liquidation_checked = true;
                         }
@@ -374,6 +376,7 @@ impl<
         {
             Log(Vec<Log>),
             Stream(Result<SubscriptionStream<'a, M::Provider, Log>, SignerMiddlewareError<M, S>>),
+            Cache,
         }
         let file = File::create("data.log").unwrap();
         let mut writer = BufWriter::new(file);
@@ -382,6 +385,10 @@ impl<
         let mut latest_block = U64::zero();
         let mut getting_logs = true;
         let mut last_block_cached = first_block;
+        let mut logs_to_cache = Vec::new();
+        let mut cached_logs = CachedLogs::from_chain_id(service.lock().await.chain_id);
+        let mut use_cache = true;
+        println!("last sync: {:?}", service.lock().await.data.last_sync);
         'filter: loop {
             let client;
             let result: DataFrom<M, S> = {
@@ -400,7 +407,11 @@ impl<
                         .cloned()
                         .collect::<Vec<Address>>(),
                 );
-                if getting_logs {
+                if use_cache {
+                    println!("get data from cache");
+                    DataFrom::Cache
+                } else if getting_logs {
+                    println!("get data from logs");
                     filter = filter.to_block(last_block);
                     let result = client.get_logs(&filter).await;
                     match result {
@@ -418,15 +429,54 @@ impl<
                         }
                     }
                 } else {
+                    println!("get data from stream");
                     DataFrom::Stream(client.subscribe_logs(&filter).await)
                 }
             };
             match result {
+                DataFrom::Cache => {
+                    _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
+                    let mut me = service.lock().await;
+                    for (i, logs) in &mut cached_logs.enumerate() {
+                        print!("\ngetting logs from cache block {} on block ", i);
+                        for log in logs {
+                            print!(
+                                "\rgetting logs from cache block {} on block {:?}",
+                                i, log.block_number
+                            );
+                            let status =
+                                me.handle_log(log.clone(), &debounce_tx, &mut writer).await;
+                            match status {
+                                Err(e) => {
+                                    protocol_error_breadcrumb(&e);
+                                    panic!("Error handling log {:?}", e);
+                                }
+                                _ => (),
+                            };
+                            me.data.last_sync = (
+                                log.block_number.unwrap_or_default(),
+                                log.transaction_index.unwrap_or_default().as_u64() as i128,
+                                log.log_index.unwrap_or_default().as_u128() as i128,
+                            );
+                        }
+                    }
+                    println!("sync from cache: {:?}", me.data.last_sync);
+
+                    first_block = me.data.last_sync.0;
+                    last_block = first_block + page_size;
+
+                    use_cache = false;
+                }
                 DataFrom::Log(logs) => {
                     _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
                     let mut me = service.lock().await;
                     for log in logs {
+                        logs_to_cache.push(log.clone());
                         let status = me.handle_log(log, &debounce_tx, &mut writer).await;
+                        if logs_to_cache.len() > 500 {
+                            write_cache(&mut logs_to_cache, &mut cached_logs);
+                            println!("last sync written to cache: {:?}", me.data.last_sync);
+                        }
                         match status {
                             Ok(result) => {
                                 if let LogIterating::UpdateFilters = result {
@@ -434,6 +484,7 @@ impl<
                                     continue 'filter;
                                 }
                             }
+
                             Err(e) => {
                                 protocol_error_breadcrumb(&e);
                                 panic!("Error handling log {:?}", e);
@@ -442,7 +493,6 @@ impl<
                     }
                     if last_block - last_block_cached > U64::from(420 * page_size) {
                         last_block_cached = last_block;
-                        write_cache(me.chain_id, &me.data);
                     }
                     if last_block >= latest_block {
                         first_block = latest_block;
@@ -464,6 +514,10 @@ impl<
                     Ok(mut stream) => {
                         _ = std::io::Write::flush(&mut writer);
                         while let Some(log) = stream.next().await {
+                            logs_to_cache.push(log.clone());
+                            if logs_to_cache.len() > 500 {
+                                write_cache(&mut logs_to_cache, &mut cached_logs);
+                            }
                             let mut me = service.lock().await;
                             let status = me.handle_log(log, &debounce_tx, &mut writer).await;
                             match status {
@@ -2197,19 +2251,32 @@ fn remove_cache(chain_id: u64) {
     let _ = fs::remove_file(ProtocolData::cache_path(chain_id));
 }
 
-fn write_cache(chain_id: u64, data: &ProtocolData) {
-    remove_cache(chain_id);
-    if let Ok(file) = File::options()
-        .write(true)
-        .create(true)
-        .open(ProtocolData::cache_path(chain_id))
-    {
-        let r = serde_json::to_writer(file, data);
-        match r {
-            Ok(_) => info!("cache logs written"),
-            Err(e) => info!("error writing cache logs: {:?}", e),
-        }
-    }
+fn write_cache(logs_to_cache: &mut Vec<Log>, cached_logs: &mut CachedLogs) {
+    let _ = serde_json::ser::to_vec(&logs_to_cache).and_then(|logs| {
+        let chain_id = cached_logs.chain_id;
+        let current = cached_logs.current;
+        tokio::spawn(async move {
+            let Ok(mut writer) =
+                cacache::Writer::create(ProtocolData::cache_path(chain_id), current.to_string())
+                    .await
+            else {
+                panic!("Failed to create cache file");
+            };
+
+            for chunk in logs.chunks(1024) {
+                let _ = writer.write_all(chunk).await.is_err_and(|_| {
+                    panic!("Failed to write cache file");
+                });
+            }
+            let _ = writer.commit().await.is_err_and(|_| {
+                panic!("Failed to commit cache file");
+            });
+            println!("cache saved: {}", current);
+        });
+        cached_logs.current += 1;
+        logs_to_cache.clear();
+        Ok(())
+    });
 }
 
 fn protocol_error_breadcrumb(e: &Report) {
@@ -2302,5 +2369,40 @@ pub mod hashmap_as_vector {
     {
         let container: Vec<_> = serde::Deserialize::deserialize(des)?;
         Ok(T::from_iter(container))
+    }
+}
+
+#[derive(Clone, Default)]
+struct CachedLogs {
+    pub chain_id: u64,
+    pub current: u64,
+}
+
+impl CachedLogs {
+    pub fn from_chain_id(chain_id: u64) -> Self {
+        Self {
+            chain_id,
+            ..Default::default()
+        }
+    }
+}
+
+impl<'a> Iterator for &'a mut CachedLogs {
+    type Item = Vec<Log>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        serde_json::de::from_slice(
+            cacache::read_sync(
+                ProtocolData::cache_path(self.chain_id),
+                self.current.to_string(),
+            )
+            .ok()?
+            .as_slice(),
+        )
+        .ok()
+        .and_then(|logs| {
+            self.current += 1;
+            Some(logs)
+        })
     }
 }
