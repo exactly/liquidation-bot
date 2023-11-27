@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.2
 FROM rustlang/rust:nightly-bookworm-slim AS builder
 
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install --no-install-recommends -y pkg-config libssl-dev
 
 WORKDIR /liq-bot
@@ -20,6 +21,7 @@ RUN cargo fmt --check \
 
 FROM debian:bookworm-slim
 
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
