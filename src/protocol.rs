@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -50,8 +50,9 @@ use crate::generate_abi::LiquidateFilter;
 
 pub const BASE_FEED: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
-const CACHE_PATH: &str = ".cache_test";
+const CACHE_PATH: &str = ".cache";
 const CACHE_PROTOCOL: &str = "protocol";
+const CACHE_BLOCK_SIZE: usize = 10000;
 
 pub type TokenPairFeeMap = HashMap<(Address, Address), BinaryHeap<Reverse<u32>>>;
 
@@ -64,6 +65,7 @@ enum ContractKeyKind {
 
 enum LogIterating {
     NextLog,
+    NextLogWithoutSaving,
     UpdateFilters,
 }
 
@@ -130,18 +132,6 @@ impl ProtocolData {
         market_weth_address: Address,
         config: &Config,
     ) -> Result<ProtocolData> {
-        //     let Ok(file) = File::options()
-        //         .read(true)
-        //         .open(ProtocolData::cache_path(config.chain_id))
-        //     else {
-        //         return Self::new(auditor, deployed_block, config, market_weth_address).await;
-        //     };
-
-        //     let Ok(protocol_data) = serde_json::from_reader::<_, ProtocolData>(file) else {
-        //         return Self::new(auditor, deployed_block, config, market_weth_address).await;
-        //     };
-
-        // Ok(protocol_data)
         Self::new(auditor, deployed_block, config, market_weth_address).await
     }
     async fn new<M: 'static + Middleware, S: 'static + Signer>(
@@ -195,6 +185,8 @@ pub struct Protocol<M, W, S> {
     chain_id: u64,
     config: Config,
     network: Arc<Network>,
+    creating_current_status: bool,
+    market_price_feeds: HashMap<Address, Address>,
 }
 
 impl<
@@ -301,6 +293,8 @@ impl<
             chain_id: config.chain_id,
             config: config.clone(),
             network: Arc::clone(&network),
+            creating_current_status: true,
+            market_price_feeds: HashMap::new(),
         })
     }
 
@@ -388,7 +382,6 @@ impl<
         let mut logs_to_cache = Vec::new();
         let mut cached_logs = CachedLogs::from_chain_id(service.lock().await.chain_id);
         let mut use_cache = true;
-        println!("last sync: {:?}", service.lock().await.data.last_sync);
         'filter: loop {
             let client;
             let result: DataFrom<M, S> = {
@@ -408,10 +401,8 @@ impl<
                         .collect::<Vec<Address>>(),
                 );
                 if use_cache {
-                    println!("get data from cache");
                     DataFrom::Cache
                 } else if getting_logs {
-                    println!("get data from logs");
                     filter = filter.to_block(last_block);
                     let result = client.get_logs(&filter).await;
                     match result {
@@ -419,7 +410,7 @@ impl<
                         Err(e) => {
                             if let SignerMiddlewareError::MiddlewareError(error) = e {
                                 if let Some(rpc) = error.as_error_response() {
-                                    if rpc.message.contains("Query timeout exceeded") {
+                                    if rpc.message.contains("Log response size exceeded") {
                                         last_block = (first_block + last_block) / 2;
                                         continue;
                                     }
@@ -429,7 +420,6 @@ impl<
                         }
                     }
                 } else {
-                    println!("get data from stream");
                     DataFrom::Stream(client.subscribe_logs(&filter).await)
                 }
             };
@@ -437,13 +427,8 @@ impl<
                 DataFrom::Cache => {
                     _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
                     let mut me = service.lock().await;
-                    for (i, logs) in &mut cached_logs.enumerate() {
-                        print!("\ngetting logs from cache block {} on block ", i);
+                    for logs in &mut cached_logs {
                         for log in logs {
-                            print!(
-                                "\rgetting logs from cache block {} on block {:?}",
-                                i, log.block_number
-                            );
                             let status =
                                 me.handle_log(log.clone(), &debounce_tx, &mut writer).await;
                             match status {
@@ -460,7 +445,6 @@ impl<
                             );
                         }
                     }
-                    println!("sync from cache: {:?}", me.data.last_sync);
 
                     first_block = me.data.last_sync.0;
                     last_block = first_block + page_size;
@@ -471,20 +455,21 @@ impl<
                     _ = debounce_tx.send(TaskActivity::StopCheckLiquidation).await;
                     let mut me = service.lock().await;
                     for log in logs {
-                        logs_to_cache.push(log.clone());
-                        let status = me.handle_log(log, &debounce_tx, &mut writer).await;
-                        if logs_to_cache.len() > 500 {
-                            write_cache(&mut logs_to_cache, &mut cached_logs);
-                            println!("last sync written to cache: {:?}", me.data.last_sync);
-                        }
+                        let status = me.handle_log(log.clone(), &debounce_tx, &mut writer).await;
                         match status {
-                            Ok(result) => {
-                                if let LogIterating::UpdateFilters = result {
+                            Ok(result) => match result {
+                                LogIterating::UpdateFilters => {
                                     first_block = me.data.last_sync.0;
                                     continue 'filter;
                                 }
-                            }
-
+                                LogIterating::NextLog => {
+                                    logs_to_cache.push(log);
+                                    if logs_to_cache.len() > CACHE_BLOCK_SIZE {
+                                        write_cache(&mut logs_to_cache, &mut cached_logs);
+                                    }
+                                }
+                                _ => (),
+                            },
                             Err(e) => {
                                 protocol_error_breadcrumb(&e);
                                 panic!("Error handling log {:?}", e);
@@ -497,10 +482,26 @@ impl<
                     if last_block >= latest_block {
                         first_block = latest_block;
                         getting_logs = false;
-                        let _ = debounce_tx
+
+                        if me.creating_current_status {
+                            me.creating_current_status = false;
+                            for (market, price_feed) in me.market_price_feeds.clone().into_iter() {
+                                _ = me
+                                    .parse_and_add_price_feed_event(
+                                        price_feed,
+                                        market,
+                                        first_block - 1,
+                                    )
+                                    .await;
+                                _ = me.update_prices(market, first_block - 1).await;
+                            }
+                            me.market_price_feeds.clear();
+                        };
+
+                        _ = debounce_tx
                             .send(TaskActivity::UpdateAll(Some(latest_block)))
                             .await;
-                        let _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
+                        _ = debounce_tx.send(TaskActivity::StartCheckLiquidation).await;
                     } else {
                         first_block = last_block + 1u64;
                         last_block = if first_block + page_size > latest_block {
@@ -514,29 +515,40 @@ impl<
                     Ok(mut stream) => {
                         _ = std::io::Write::flush(&mut writer);
                         while let Some(log) = stream.next().await {
-                            logs_to_cache.push(log.clone());
-                            if logs_to_cache.len() > 500 {
-                                write_cache(&mut logs_to_cache, &mut cached_logs);
-                            }
                             let mut me = service.lock().await;
-                            let status = me.handle_log(log, &debounce_tx, &mut writer).await;
+                            let status =
+                                me.handle_log(log.clone(), &debounce_tx, &mut writer).await;
                             match status {
                                 Ok(result) => {
-                                    if let LogIterating::UpdateFilters = result {
-                                        _ = debounce_tx
-                                            .send(TaskActivity::StopCheckLiquidation)
-                                            .await;
-                                        first_block = me.data.last_sync.0;
-                                        continue 'filter;
-                                    } else if me.wait_for_final_event {
-                                        _ = debounce_tx
-                                            .send(TaskActivity::StopCheckLiquidation)
-                                            .await;
-                                    } else {
-                                        _ = debounce_tx
-                                            .send(TaskActivity::StartCheckLiquidation)
-                                            .await;
-                                    }
+                                    match result {
+                                        LogIterating::UpdateFilters => {
+                                            _ = debounce_tx
+                                                .send(TaskActivity::StopCheckLiquidation)
+                                                .await;
+                                            first_block = me.data.last_sync.0;
+                                            continue 'filter;
+                                        }
+                                        _ => {
+                                            if me.wait_for_final_event {
+                                                _ = debounce_tx
+                                                    .send(TaskActivity::StopCheckLiquidation)
+                                                    .await;
+                                            } else {
+                                                _ = debounce_tx
+                                                    .send(TaskActivity::StartCheckLiquidation)
+                                                    .await;
+                                            }
+                                            if let LogIterating::NextLog = result {
+                                                logs_to_cache.push(log);
+                                                if logs_to_cache.len() > CACHE_BLOCK_SIZE {
+                                                    write_cache(
+                                                        &mut logs_to_cache,
+                                                        &mut cached_logs,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    };
                                 }
                                 Err(e) => {
                                     protocol_error_breadcrumb(&e);
@@ -829,7 +841,9 @@ impl<
                     },
                     data.market,
                 );
-                self.update_prices(data.market, meta.block_number).await?;
+                if !self.creating_current_status {
+                    self.update_prices(data.market, meta.block_number).await?;
+                }
                 self.data.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
@@ -998,9 +1012,20 @@ impl<
                     market.base_market = true;
                     return Ok(LogIterating::NextLog);
                 }
-                let on_market = data.market;
-                self.handle_price_feed(data, &meta).await?;
-                self.update_prices(on_market, meta.block_number).await?;
+                if !self.creating_current_status {
+                    self.parse_and_add_price_feed_event(
+                        data.price_feed,
+                        data.market,
+                        meta.block_number,
+                    )
+                    .await?;
+                    self.update_prices(data.market, meta.block_number).await?;
+                } else {
+                    *self
+                        .market_price_feeds
+                        .entry(data.market)
+                        .or_insert(data.price_feed) = data.price_feed;
+                }
                 self.data.last_sync = (
                     meta.block_number,
                     meta.transaction_index.as_u64() as i128,
@@ -1048,6 +1073,10 @@ impl<
                         market.price = price;
                     };
                 });
+                sender
+                    .send(TaskActivity::UpdateAll(log.block_number))
+                    .await?;
+                return Ok(LogIterating::NextLogWithoutSaving);
             }
 
             ExactlyEvents::MarketUpdate(data) => {
@@ -1147,6 +1176,10 @@ impl<
                                 * U256::exp10(18 - self.data.price_decimals.as_usize());
                         }
                     });
+                sender
+                    .send(TaskActivity::UpdateAll(log.block_number))
+                    .await?;
+                return Ok(LogIterating::NextLogWithoutSaving);
             }
             ExactlyEvents::NewTransmission(_) => {
                 // Enable comparison just after receive AnswerUpdated event
@@ -1160,16 +1193,17 @@ impl<
         Ok(LogIterating::NextLog)
     }
 
-    async fn handle_price_feed(
+    async fn parse_and_add_price_feed_event(
         &mut self,
-        data: crate::generate_abi::PriceFeedSetFilter,
-        meta: &LogMeta,
+        data_price_feed: Address,
+        data_market: Address,
+        block_number: U64,
     ) -> Result<(), eyre::ErrReport> {
         let mut price_feed = PriceFeedController::default();
-        price_feed.address = data.price_feed;
+        price_feed.address = data_price_feed;
 
-        let wrapper = PriceFeedWrapper::new(data.price_feed, Arc::clone(&self.client));
-        let double = PriceFeedDouble::new(data.price_feed, Arc::clone(&self.client));
+        let wrapper = PriceFeedWrapper::new(data_price_feed, Arc::clone(&self.client));
+        let double = PriceFeedDouble::new(data_price_feed, Arc::clone(&self.client));
         let mut wrapper_single_multicall = self.multicall.clone();
         wrapper_single_multicall.clear_calls();
         wrapper_single_multicall.add_call(wrapper.main_price_feed(), true);
@@ -1184,10 +1218,10 @@ impl<
         wrapper_double_multicall.add_call(double.decimals(), true);
         let wrapper_single_multicall = wrapper_single_multicall
             .version(MulticallVersion::Multicall)
-            .block(meta.block_number);
+            .block(block_number);
         let wrapper_double_multicall = wrapper_double_multicall
             .version(MulticallVersion::Multicall)
-            .block(meta.block_number);
+            .block(block_number);
 
         let (single_price_feed_result, double_price_feed_result) = tokio::join!(
             wrapper_single_multicall.call(),
@@ -1231,7 +1265,7 @@ impl<
             }));
             vec![price_feed_one, price_feed_two]
         } else {
-            vec![data.price_feed]
+            vec![data_price_feed]
         };
         let mut aggregator_multicall = self.multicall.clone();
         aggregator_multicall.clear_calls();
@@ -1242,7 +1276,7 @@ impl<
             );
         }
         let response = aggregator_multicall
-            .block(meta.block_number)
+            .block(block_number)
             .version(MulticallVersion::Multicall)
             .call_raw()
             .await;
@@ -1264,7 +1298,7 @@ impl<
         for (index, event_emitter) in price_feed.event_emitters.iter().enumerate() {
             self.data.contracts_to_listen.insert(
                 ContractKey {
-                    address: data.market,
+                    address: data_market,
                     kind: ContractKeyKind::PriceFeed,
                     index,
                 },
@@ -1274,7 +1308,7 @@ impl<
         let market = self
             .data
             .markets
-            .entry(data.market)
+            .entry(data_market)
             .or_insert_with_key(|key| Market::new(*key));
         market.price_feed = Some(price_feed);
         if let Some(PriceFeedType::Single(wrapper)) = market
@@ -1284,7 +1318,7 @@ impl<
             .as_mut()
         {
             let lido = PriceFeedLido::new(wrapper.address, Arc::clone(&self.client));
-            let oracle = lido.get_oracle().block(meta.block_number).call().await?;
+            let oracle = lido.get_oracle().block(block_number).call().await?;
             wrapper.event_emitter = Some(oracle);
             self.data.contracts_to_listen.insert(
                 ContractKey {
@@ -1708,6 +1742,8 @@ impl<
                 );
             });
 
+        info!("comparing {:?} accounts", self.data.accounts.len());
+        let mut accounts_with_borrows = 0;
         if !self.data.accounts.is_empty() {
             let mut tasks = Vec::new();
             for multicall in multicall_pool {
@@ -1731,6 +1767,7 @@ impl<
                     v[1].clone().into_uint().unwrap(),
                 );
                 if adjusted_debt > U256::zero() {
+                    accounts_with_borrows += 1;
                     let previewer_hf = adjusted_collateral.div_wad_down(adjusted_debt);
                     if let Some(account) = self.data.accounts.get(address) {
                         let _ = Self::compute_hf(&self.data.markets, account, timestamp, None).map(
@@ -1759,6 +1796,7 @@ impl<
                     }
                 }
             }
+            info!("accounts with borrows: {}", accounts_with_borrows);
         }
         if !success {
             let mut data = BTreeMap::new();
@@ -1775,6 +1813,8 @@ impl<
                 ..Default::default()
             });
             panic!("compare accounts error");
+        } else {
+            info!("accounts compared successfully");
         }
         Ok(())
     }
@@ -2247,12 +2287,8 @@ impl<
     }
 }
 
-fn remove_cache(chain_id: u64) {
-    let _ = fs::remove_file(ProtocolData::cache_path(chain_id));
-}
-
 fn write_cache(logs_to_cache: &mut Vec<Log>, cached_logs: &mut CachedLogs) {
-    let _ = serde_json::ser::to_vec(&logs_to_cache).and_then(|logs| {
+    _ = serde_json::ser::to_vec(&logs_to_cache).and_then(|logs| {
         let chain_id = cached_logs.chain_id;
         let current = cached_logs.current;
         tokio::spawn(async move {
@@ -2264,14 +2300,13 @@ fn write_cache(logs_to_cache: &mut Vec<Log>, cached_logs: &mut CachedLogs) {
             };
 
             for chunk in logs.chunks(1024) {
-                let _ = writer.write_all(chunk).await.is_err_and(|_| {
+                _ = writer.write_all(chunk).await.is_err_and(|_| {
                     panic!("Failed to write cache file");
                 });
             }
-            let _ = writer.commit().await.is_err_and(|_| {
+            _ = writer.commit().await.is_err_and(|_| {
                 panic!("Failed to commit cache file");
             });
-            println!("cache saved: {}", current);
         });
         cached_logs.current += 1;
         logs_to_cache.clear();
