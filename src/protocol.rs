@@ -431,12 +431,9 @@ impl<
                         for log in logs {
                             let status =
                                 me.handle_log(log.clone(), &debounce_tx, &mut writer).await;
-                            match status {
-                                Err(e) => {
-                                    protocol_error_breadcrumb(&e);
-                                    panic!("Error handling log {:?}", e);
-                                }
-                                _ => (),
+                            if let Err(e) = status {
+                                protocol_error_breadcrumb(&e);
+                                panic!("Error handling log {:?}", e);
                             };
                             me.data.last_sync = (
                                 log.block_number.unwrap_or_default(),
@@ -1199,8 +1196,10 @@ impl<
         data_market: Address,
         block_number: U64,
     ) -> Result<(), eyre::ErrReport> {
-        let mut price_feed = PriceFeedController::default();
-        price_feed.address = data_price_feed;
+        let mut price_feed = PriceFeedController {
+            address: data_price_feed,
+            ..Default::default()
+        };
 
         let wrapper = PriceFeedWrapper::new(data_price_feed, Arc::clone(&self.client));
         let double = PriceFeedDouble::new(data_price_feed, Arc::clone(&self.client));
@@ -2288,7 +2287,7 @@ impl<
 }
 
 fn write_cache(logs_to_cache: &mut Vec<Log>, cached_logs: &mut CachedLogs) {
-    _ = serde_json::ser::to_vec(&logs_to_cache).and_then(|logs| {
+    _ = serde_json::ser::to_vec(&logs_to_cache).map(|logs| {
         let chain_id = cached_logs.chain_id;
         let current = cached_logs.current;
         tokio::spawn(async move {
@@ -2310,7 +2309,6 @@ fn write_cache(logs_to_cache: &mut Vec<Log>, cached_logs: &mut CachedLogs) {
         });
         cached_logs.current += 1;
         logs_to_cache.clear();
-        Ok(())
     });
 }
 
@@ -2435,9 +2433,9 @@ impl<'a> Iterator for &'a mut CachedLogs {
             .as_slice(),
         )
         .ok()
-        .and_then(|logs| {
+        .map(|logs| {
             self.current += 1;
-            Some(logs)
+            logs
         })
     }
 }
