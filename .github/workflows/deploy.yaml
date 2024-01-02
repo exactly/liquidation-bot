@@ -21,6 +21,6 @@ jobs:
           credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
       - uses: google-github-actions/get-gke-credentials@v1
         with:
-          cluster_name: liquidation-bot
+          cluster_name: exactly
           location: us-central1
       - run: kubectl set image deployment/${{ inputs.environment || 'goerli' }} liquidation-bot=${{ env.IMAGE_TAG }}
