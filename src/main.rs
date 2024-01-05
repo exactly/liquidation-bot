@@ -178,6 +178,7 @@ async fn main() -> Result<()> {
             ..Default::default()
         });
 
+        error!("{:#?}", panic_info);
         if let Some(client) = sentry::Hub::current().client() {
             client.close(Some(Duration::from_secs(2)));
         }
