@@ -285,6 +285,7 @@ impl EthLogDecode for ExactlyEvents {
             "0xed8889f560326eb138920d842192f0eb3dd22b4f139c87a2c57538e05bae1278", // OwnershipTransferRequested(address,address)
             "0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0", // OwnershipTransferred(address,address)
             "0x84f7c7c80bb8ed2279b4aab5f61cd05e6374073d38f46d7f32de8c30e9e38367", // PayeeshipTransferRequested(address,address,address)
+            "0xde0e3a281fa92ee953a13c5bd96dcaf07b10c6b9f42c65d0e3752c855caa6e7c",
         ]
         .iter()
         .map(|x| H256::from_str(x).unwrap())
