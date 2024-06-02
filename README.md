@@ -12,7 +12,7 @@ The liquidation bot is written in Rust; therefore, it must be installed and set 
 Cloning the project:
 
 ```shell
-git clone git@github.com:exactly-protocol/liquidation-bot.git
+git clone git@github.com:exactly/liquidation-bot.git
 ```
 
 Deploying flash loan contracts:
